@@ -38,9 +38,13 @@ data class BleDiagState(
 
 object BleGateway {
     fun requiredPermissions(): Array<String> = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-        arrayOf(Manifest.permission.BLUETOOTH_SCAN, Manifest.permission.ACCESS_FINE_LOCATION)
+        arrayOf(
+            Manifest.permission.BLUETOOTH_SCAN,
+            Manifest.permission.ACCESS_COARSE_LOCATION,
+            Manifest.permission.ACCESS_FINE_LOCATION,
+        )
     } else {
-        arrayOf(Manifest.permission.ACCESS_FINE_LOCATION)
+        arrayOf(Manifest.permission.ACCESS_COARSE_LOCATION, Manifest.permission.ACCESS_FINE_LOCATION)
     }
 
     fun hasPermissions(context: Context): Boolean = requiredPermissions().all {
