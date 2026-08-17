@@ -118,15 +118,28 @@ fun SensorScreen(server: SensorState?) {
             }
         }
 
-        if (local.lastRaw.isNotBlank()) {
+        if (local.lastRaw.isNotBlank() || local.lastFailRaw.isNotBlank()) {
             Card(Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     Text("诊断", style = MaterialTheme.typography.titleMedium)
-                    Text("最近 FE95：", style=MaterialTheme.typography.bodySmall)
-                    Text(local.lastRaw, fontFamily=FontFamily.Monospace, style=MaterialTheme.typography.bodySmall)
+                    if (local.lastRaw.isNotBlank()) {
+                        Text("最近成功 FE95：", style=MaterialTheme.typography.bodySmall)
+                        Text(local.lastRaw, fontFamily=FontFamily.Monospace, style=MaterialTheme.typography.bodySmall)
+                    }
                     if(local.lastPlain.isNotBlank()) {
-                        Text("最近解密明文：", style=MaterialTheme.typography.bodySmall)
+                        Text("最近成功解密明文：", style=MaterialTheme.typography.bodySmall)
                         Text(local.lastPlain, fontFamily=FontFamily.Monospace, style=MaterialTheme.typography.bodySmall)
+                    }
+                    if (local.lastFailRaw.isNotBlank()) {
+                        HorizontalDivider()
+                        Text("最近解密失败：${age(local.lastFailSeenMs)}", style=MaterialTheme.typography.bodySmall)
+                        Text("失败 FE95：", style=MaterialTheme.typography.bodySmall)
+                        Text(local.lastFailRaw, fontFamily=FontFamily.Monospace, style=MaterialTheme.typography.bodySmall)
+                        if (local.lastFailMeta.isNotBlank()) {
+                            Text("失败帧元数据：", style=MaterialTheme.typography.bodySmall)
+                            Text(local.lastFailMeta, fontFamily=FontFamily.Monospace, style=MaterialTheme.typography.bodySmall)
+                        }
+                        Text("失败帧不包含 BLE Key，可直接截图用于分析。", style=MaterialTheme.typography.bodySmall)
                     }
                     OutlinedButton(onClick={BleGateway.clearStats(context)}) { Text("清空诊断计数") }
                 }
