@@ -117,6 +117,7 @@ class BleGatewayService : Service() {
         scannerActive = false
     }
 
+    @SuppressLint("MissingPermission")
     private fun handleResult(result: ScanResult) {
         val record = result.scanRecord ?: return
         val fe95 = record.getServiceData(MI_BEACON_UUID)
@@ -139,7 +140,8 @@ class BleGatewayService : Service() {
         lastRaw = raw
         lastFreshnessWrite = now
 
-        val frame = MiBeaconV5.decodeSensor(fe95, BleGateway.readBindKey(this)) ?: return
+        val advertisedAddress = runCatching { result.device.address }.getOrNull()
+        val frame = MiBeaconV5.decodeSensor(fe95, BleGateway.readBindKey(this), advertisedAddress) ?: return
         val baseEditor = p.edit()
             .putLong("sensor_packets", sensorPackets)
             .putLong("last_seen_ms", now)
@@ -153,13 +155,16 @@ class BleGatewayService : Service() {
             val counter = if (fe95.size >= 5) fe95[4].toInt() and 0xff else -1
             val encrypted = fe95.isNotEmpty() && (fe95[0].toInt() and 0x08) != 0
             val capability = fe95.isNotEmpty() && (fe95[0].toInt() and 0x20) != 0
-            val payloadStart = if (capability) 12 else 11
-            val meta = "len=${fe95.size} fc=0x%04X counter=%s encrypted=%s capability=%s payloadStart=%d rssi=%d".format(
+            val compact = encrypted && fe95.size == 19
+            val payloadStart = if (compact) 5 else if (capability) 12 else 11
+            val meta = "len=${fe95.size} fc=0x%04X counter=%s encrypted=%s compact=%s capability=%s payloadStart=%d addr=%s rssi=%d".format(
                 frameControl,
                 if (counter >= 0) counter.toString() else "?",
                 encrypted,
+                compact,
                 capability,
                 payloadStart,
+                advertisedAddress ?: "?",
                 result.rssi,
             )
             baseEditor
