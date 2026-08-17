@@ -140,19 +140,40 @@ class BleGatewayService : Service() {
         lastFreshnessWrite = now
 
         val frame = MiBeaconV5.decodeSensor(fe95, BleGateway.readBindKey(this)) ?: return
-        val editor = p.edit()
+        val baseEditor = p.edit()
             .putLong("sensor_packets", sensorPackets)
             .putLong("last_seen_ms", now)
             .putInt("rssi", result.rssi)
             .putString("mac", frame.mac)
-            .putString("last_raw", frame.raw)
 
         if (!frame.authenticated) {
-            editor.putLong("decrypt_fail", p.getLong("decrypt_fail", 0) + 1).apply()
+            val frameControl = if (fe95.size >= 2) {
+                (fe95[0].toInt() and 0xff) or ((fe95[1].toInt() and 0xff) shl 8)
+            } else 0
+            val counter = if (fe95.size >= 5) fe95[4].toInt() and 0xff else -1
+            val encrypted = fe95.isNotEmpty() && (fe95[0].toInt() and 0x08) != 0
+            val capability = fe95.isNotEmpty() && (fe95[0].toInt() and 0x20) != 0
+            val payloadStart = if (capability) 12 else 11
+            val meta = "len=${fe95.size} fc=0x%04X counter=%s encrypted=%s capability=%s payloadStart=%d rssi=%d".format(
+                frameControl,
+                if (counter >= 0) counter.toString() else "?",
+                encrypted,
+                capability,
+                payloadStart,
+                result.rssi,
+            )
+            baseEditor
+                .putLong("decrypt_fail", p.getLong("decrypt_fail", 0) + 1)
+                .putString("last_fail_raw", raw)
+                .putString("last_fail_meta", meta)
+                .putLong("last_fail_seen_ms", now)
+                .apply()
             return
         }
 
-        editor.putLong("decrypt_ok", p.getLong("decrypt_ok", 0) + 1)
+        val editor = baseEditor
+            .putLong("decrypt_ok", p.getLong("decrypt_ok", 0) + 1)
+            .putString("last_raw", frame.raw)
         frame.plain?.let { editor.putString("last_plain", it) }
         var hasMeasurement = false
         frame.temperature?.let {
