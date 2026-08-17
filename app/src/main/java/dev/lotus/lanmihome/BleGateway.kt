@@ -27,6 +27,9 @@ data class BleGatewayState(
     val lastMeasurementMs: Long = 0,
     val lastRaw: String = "",
     val lastPlain: String = "",
+    val lastFailRaw: String = "",
+    val lastFailMeta: String = "",
+    val lastFailSeenMs: Long = 0,
     val lastUploadMs: Long = 0,
     val lastUploadError: String? = null,
     val lastError: String? = null,
@@ -70,6 +73,9 @@ object BleGateway {
             lastMeasurementMs = p.getLong("last_measurement_ms", 0),
             lastRaw = p.getString("last_raw", "") ?: "",
             lastPlain = p.getString("last_plain", "") ?: "",
+            lastFailRaw = p.getString("last_fail_raw", "") ?: "",
+            lastFailMeta = p.getString("last_fail_meta", "") ?: "",
+            lastFailSeenMs = p.getLong("last_fail_seen_ms", 0),
             lastUploadMs = p.getLong("last_upload_ms", 0),
             lastUploadError = p.getString("last_upload_error", null),
             lastError = p.getString("last_error", null),
@@ -121,6 +127,9 @@ object BleGateway {
             .remove("decrypt_fail")
             .remove("last_raw")
             .remove("last_plain")
+            .remove("last_fail_raw")
+            .remove("last_fail_meta")
+            .remove("last_fail_seen_ms")
             .remove("last_error")
             .remove("last_upload_error")
             .apply()
