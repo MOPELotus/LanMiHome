@@ -5,7 +5,7 @@ import android.annotation.SuppressLint
 import android.app.PendingIntent
 import android.bluetooth.BluetoothManager
 import android.bluetooth.le.BluetoothLeScanner
-import android.bluetooth.le.ScanFilter
+import android.bluetooth.le.ScanCallback
 import android.bluetooth.le.ScanResult
 import android.bluetooth.le.ScanSettings
 import android.content.BroadcastReceiver
@@ -41,6 +41,9 @@ data class BleDiagState(
 )
 
 object BleGateway {
+    private var activeScanner: BluetoothLeScanner? = null
+    private var activeCallback: ScanCallback? = null
+
     fun requiredPermissions(): Array<String> = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
         arrayOf(
             Manifest.permission.BLUETOOTH_SCAN,
@@ -108,27 +111,48 @@ object BleGateway {
     @SuppressLint("MissingPermission")
     fun start(context: Context): String? {
         if (!hasPermissions(context)) return "缺少蓝牙扫描/定位权限"
-        val manager = context.getSystemService(BluetoothManager::class.java)
+        val appContext = context.applicationContext
+        val manager = appContext.getSystemService(BluetoothManager::class.java)
             ?: return "设备没有 BluetoothManager"
         val adapter = manager.adapter ?: return "设备不支持蓝牙"
         val scanner = adapter.bluetoothLeScanner ?: return "蓝牙未开启或 BLE 扫描不可用"
 
-        // Diagnostic mode: deliberately scan ALL BLE advertisements.  This tells
-        // us whether Android scanning itself works before we blame MiBeacon filters.
-        // One empty ScanFilter is a match-all filter for the PendingIntent API.
-        val filters = listOf(ScanFilter.Builder().build())
+        // v4 diagnostic mode: use the in-process ScanCallback API with NO filter.
+        // This avoids PendingIntent delivery / OEM broadcast quirks entirely while
+        // the BLE diagnostics page is open, and should see ordinary nearby BLE
+        // advertisements within seconds in a normal environment.
+        activeCallback?.let { old -> runCatching { activeScanner?.stopScan(old) } }
+        runCatching { scanner.stopScan(pendingIntent(appContext)) }
+
+        val callback = object : ScanCallback() {
+            override fun onScanResult(callbackType: Int, result: ScanResult) {
+                onResults(appContext, listOf(result), null)
+            }
+
+            override fun onBatchScanResults(results: MutableList<ScanResult>) {
+                onResults(appContext, results, null)
+            }
+
+            override fun onScanFailed(errorCode: Int) {
+                appContext.getSharedPreferences(BLE_PREFS, Context.MODE_PRIVATE).edit()
+                    .putBoolean("enabled", false)
+                    .putString("last_error", "ScanCallback failure=$errorCode")
+                    .apply()
+            }
+        }
         val settings = ScanSettings.Builder()
             .setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY)
             .setCallbackType(ScanSettings.CALLBACK_TYPE_ALL_MATCHES)
             .setReportDelay(0)
             .build()
 
-        runCatching { scanner.stopScan(pendingIntent(context)) }
-        val result = runCatching { scanner.startScan(filters, settings, pendingIntent(context)) }
-        val error = result.exceptionOrNull()?.message
-            ?: result.getOrNull()?.takeIf { it != 0 }?.let { "BLE startScan error=$it" }
+        val error = runCatching {
+            scanner.startScan(null, settings, callback)
+            activeScanner = scanner
+            activeCallback = callback
+        }.exceptionOrNull()?.let { "${it.javaClass.simpleName}: ${it.message}" }
 
-        context.getSharedPreferences(BLE_PREFS, Context.MODE_PRIVATE).edit()
+        appContext.getSharedPreferences(BLE_PREFS, Context.MODE_PRIVATE).edit()
             .putBoolean("enabled", error == null)
             .putString("last_error", error)
             .apply()
@@ -138,11 +162,17 @@ object BleGateway {
     @SuppressLint("MissingPermission")
     fun stop(context: Context): String? {
         if (!hasPermissions(context)) return "缺少蓝牙扫描/定位权限"
-        val manager = context.getSystemService(BluetoothManager::class.java)
+        val appContext = context.applicationContext
+        val manager = appContext.getSystemService(BluetoothManager::class.java)
         val scanner = manager?.adapter?.bluetoothLeScanner
-        val error = runCatching { scanner?.stopScan(pendingIntent(context)) }
-            .exceptionOrNull()?.message
-        context.getSharedPreferences(BLE_PREFS, Context.MODE_PRIVATE).edit()
+        val callback = activeCallback
+        val error = runCatching {
+            if (callback != null) scanner?.stopScan(callback)
+            scanner?.stopScan(pendingIntent(appContext))
+        }.exceptionOrNull()?.let { "${it.javaClass.simpleName}: ${it.message}" }
+        activeCallback = null
+        activeScanner = null
+        appContext.getSharedPreferences(BLE_PREFS, Context.MODE_PRIVATE).edit()
             .putBoolean("enabled", false)
             .putString("last_error", error)
             .apply()
@@ -157,7 +187,6 @@ object BleGateway {
             val end = i + 1 + len
             if (end > record.size || i + 1 >= record.size) break
             val type = record[i + 1].toInt() and 0xff
-            // AD type 0x16 = Service Data - 16-bit UUID. UUID bytes are LE.
             if (type == 0x16 && len >= 3 && i + 3 < end) {
                 val lo = record[i + 2].toInt() and 0xff
                 val hi = record[i + 3].toInt() and 0xff
@@ -197,7 +226,6 @@ object BleGateway {
             anyLastRssi = result.rssi
             anyLastRaw = rawRecord
 
-            // Try both Android's parsed service-data API and our own raw AD parser.
             val data = record.getServiceData(MI_BEACON_UUID) ?: extractFe95(recordBytes) ?: continue
             total++
             val productId = if (data.size >= 4) {
