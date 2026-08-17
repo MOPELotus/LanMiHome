@@ -8,6 +8,7 @@ import android.app.PendingIntent
 import android.app.Service
 import android.bluetooth.BluetoothManager
 import android.bluetooth.le.ScanCallback
+import android.bluetooth.le.ScanFilter
 import android.bluetooth.le.ScanResult
 import android.bluetooth.le.ScanSettings
 import android.content.Context
@@ -42,7 +43,10 @@ class BleGatewayService : Service() {
         override fun onBatchScanResults(results: MutableList<ScanResult>) = results.forEach(::handleResult)
         override fun onScanFailed(errorCode: Int) {
             scannerActive = false
-            prefs().edit().putBoolean("scanning", false).putString("last_error", "BLE scan failed: $errorCode").apply()
+            prefs().edit()
+                .putBoolean("scanning", false)
+                .putString("last_error", "BLE scan failed: $errorCode")
+                .apply()
         }
     }
 
@@ -89,23 +93,44 @@ class BleGatewayService : Service() {
         val manager = getSystemService(BluetoothManager::class.java)
         val scanner = manager?.adapter?.bluetoothLeScanner
         if (scanner == null) {
-            prefs().edit().putBoolean("scanning", false).putString("last_error", "蓝牙未开启或扫描器不可用").apply()
+            prefs().edit()
+                .putBoolean("scanning", false)
+                .putString("last_error", "蓝牙未开启或扫描器不可用")
+                .apply()
             return
         }
+
         runCatching { scanner.stopScan(callback) }
+
+        // Android suspends unfiltered BLE scans when the screen turns off.
+        // A real ScanFilter keeps the hardware/controller scan eligible in screen-off mode.
+        // We only need Xiaomi MiBeacon service data, so filtering FE95 is both cheaper and
+        // more reliable than scanning every BLE advertiser around the phone.
+        val filters = listOf(
+            ScanFilter.Builder()
+                .setServiceUuid(MI_BEACON_UUID)
+                .build()
+        )
         val settings = ScanSettings.Builder()
             .setScanMode(ScanSettings.SCAN_MODE_LOW_POWER)
             .setCallbackType(ScanSettings.CALLBACK_TYPE_ALL_MATCHES)
             .setReportDelay(0)
             .build()
-        runCatching { scanner.startScan(null, settings, callback) }
+
+        runCatching { scanner.startScan(filters, settings, callback) }
             .onSuccess {
                 scannerActive = true
-                prefs().edit().putBoolean("scanning", true).putString("last_error", null).apply()
+                prefs().edit()
+                    .putBoolean("scanning", true)
+                    .putString("last_error", null)
+                    .apply()
             }
             .onFailure {
                 scannerActive = false
-                prefs().edit().putBoolean("scanning", false).putString("last_error", it.message ?: it.javaClass.simpleName).apply()
+                prefs().edit()
+                    .putBoolean("scanning", false)
+                    .putString("last_error", it.message ?: it.javaClass.simpleName)
+                    .apply()
             }
     }
 
@@ -133,7 +158,11 @@ class BleGatewayService : Service() {
         if (raw == lastRaw) {
             if (now - lastFreshnessWrite >= 10_000) {
                 lastFreshnessWrite = now
-                p.edit().putLong("sensor_packets", sensorPackets).putLong("last_seen_ms", now).putInt("rssi", result.rssi).apply()
+                p.edit()
+                    .putLong("sensor_packets", sensorPackets)
+                    .putLong("last_seen_ms", now)
+                    .putInt("rssi", result.rssi)
+                    .apply()
             }
             return
         }
@@ -182,13 +211,16 @@ class BleGatewayService : Service() {
         frame.plain?.let { editor.putString("last_plain", it) }
         var hasMeasurement = false
         frame.temperature?.let {
-            editor.putLong("temperature", it.toBits()); hasMeasurement = true
+            editor.putLong("temperature", it.toBits())
+            hasMeasurement = true
         }
         frame.humidity?.let {
-            editor.putLong("humidity", it.toBits()); hasMeasurement = true
+            editor.putLong("humidity", it.toBits())
+            hasMeasurement = true
         }
         frame.battery?.let {
-            editor.putInt("battery", it); hasMeasurement = true
+            editor.putInt("battery", it)
+            hasMeasurement = true
         }
         if (hasMeasurement) editor.putLong("last_measurement_ms", now)
         editor.apply()
@@ -217,9 +249,14 @@ class BleGatewayService : Service() {
                     seenAtMs = seenAt,
                 )
                 LanMiHomeApi(base).reportSensor(report)
-                prefs().edit().putLong("last_upload_ms", System.currentTimeMillis()).putString("last_upload_error", null).apply()
+                prefs().edit()
+                    .putLong("last_upload_ms", System.currentTimeMillis())
+                    .putString("last_upload_error", null)
+                    .apply()
             } catch (e: Exception) {
-                prefs().edit().putString("last_upload_error", e.message ?: e.javaClass.simpleName).apply()
+                prefs().edit()
+                    .putString("last_upload_error", e.message ?: e.javaClass.simpleName)
+                    .apply()
             } finally {
                 uploadInFlight = false
             }
@@ -254,7 +291,9 @@ class BleGatewayService : Service() {
     private fun buildNotification(text: String): android.app.Notification {
         val launchIntent = packageManager.getLaunchIntentForPackage(packageName) ?: Intent(this, MainActivity::class.java)
         val pi = PendingIntent.getActivity(
-            this, 0, launchIntent,
+            this,
+            0,
+            launchIntent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
         return android.app.Notification.Builder(this, CHANNEL_ID)
