@@ -83,15 +83,17 @@ object MiBeaconV5 {
                     humidity = u16le(plain, start + 2) / 10.0
                 }
 
-                // Newer MiaoMiaoCe/Xiaomi thermometers also use the 0x4Cxx/
-                // 0x48xx object family. MJWSD06MMC emits these on stock firmware.
-                // ESPHome's Xiaomi BLE parser uses the same interpretations.
-                0x4C01 -> if (len >= 4) {
+                // MiaoMiaoCe/Xiaomi object families.
+                // MJWSD06MMC stock firmware uses 0x4801/0x4802/0x4803.
+                0x4801, 0x4C01 -> if (len >= 4) {
                     val v = Float.fromBits(u32le(plain, start)).toDouble()
                     if (v.isFinite() && v in -80.0..120.0) temperature = v
                 }
-                0x4C02 -> if (len >= 1) humidity = (plain[start].toInt() and 0xff).toDouble()
-                0x4C08 -> if (len >= 4) {
+                0x4802, 0x4C02 -> if (len >= 1) {
+                    val v = plain[start].toInt() and 0xff
+                    if (v in 0..100) humidity = v.toDouble()
+                }
+                0x4808, 0x4C08 -> if (len >= 4) {
                     val v = Float.fromBits(u32le(plain, start)).toDouble()
                     if (v.isFinite() && v in 0.0..100.0) humidity = v
                 }
