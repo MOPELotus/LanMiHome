@@ -1,0 +1,13 @@
+# Copy this file to chargers.toml and fill it locally.
+# chargers.toml is intentionally ignored by git.
+# Do not paste device credentials into issues, chat, or commits.
+
+[[charger]]
+name = "desk"
+address = "AA:BB:CC:DD:EE:01"
+token = "000000000000000000000000"
+
+[[charger]]
+name = "bed"
+address = "AA:BB:CC:DD:EE:02"
+token = "000000000000000000000000"
