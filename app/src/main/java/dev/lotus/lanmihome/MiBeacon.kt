@@ -39,24 +39,38 @@ object MiBeaconV5 {
         return null
     }
 
-    fun decodeSensor(data: ByteArray, bindKey: ByteArray?): MiBeaconSensorFrame? {
-        if (data.size < 11) return null
+    fun decodeSensor(data: ByteArray, bindKey: ByteArray?, advertisedAddress: String? = null): MiBeaconSensorFrame? {
+        if (data.size < 5) return null
         val pid = u16le(data, 2)
         if (pid != SENSOR_PRODUCT_ID) return null
 
         val frameCounter = data[4].toInt() and 0xff
-        val macBytes = data.copyOfRange(5, 11)
-        val mac = macBytes.reversedArray().joinToString(":") { "%02X".format(it.toInt() and 0xff) }
         val encrypted = (data[0].toInt() and 0x08) != 0
+        val compactEncrypted = encrypted && data.size == 19
         val hasCapability = (data[0].toInt() and 0x20) != 0
-        val payloadStart = if (hasCapability) 12 else 11
+        val payloadStart = if (compactEncrypted) 5 else if (hasCapability) 12 else 11
         val raw = data.hex()
 
+        val macBytesForNonce: ByteArray?
+        val mac: String
+        if (compactEncrypted) {
+            val parsed = parseMac(advertisedAddress)
+            macBytesForNonce = parsed?.reversedArray()
+            mac = parsed?.joinToString(":") { "%02X".format(it.toInt() and 0xff) }
+                ?: advertisedAddress?.uppercase()
+                ?: "UNKNOWN"
+        } else {
+            if (data.size < 11) return null
+            val reversed = data.copyOfRange(5, 11)
+            macBytesForNonce = reversed
+            mac = reversed.reversedArray().joinToString(":") { "%02X".format(it.toInt() and 0xff) }
+        }
+
         val plain = if (encrypted) {
-            if (bindKey == null || bindKey.size != 16 || data.size < payloadStart + 7) {
+            if (bindKey == null || bindKey.size != 16 || macBytesForNonce == null) {
                 return MiBeaconSensorFrame(pid, frameCounter, mac, true, false, raw = raw)
             }
-            decrypt(data, bindKey, payloadStart)
+            decrypt(data, bindKey, payloadStart, macBytesForNonce)
                 ?: return MiBeaconSensorFrame(pid, frameCounter, mac, true, false, raw = raw)
         } else {
             if (payloadStart > data.size) return null
@@ -116,14 +130,14 @@ object MiBeaconV5 {
         )
     }
 
-    private fun decrypt(data: ByteArray, key: ByteArray, payloadStart: Int): ByteArray? = runCatching {
+    private fun decrypt(data: ByteArray, key: ByteArray, payloadStart: Int, macBytesForNonce: ByteArray): ByteArray? = runCatching {
         val cipherEnd = data.size - 7
-        if (cipherEnd < payloadStart) return null
+        if (cipherEnd < payloadStart || macBytesForNonce.size != 6) return null
         val cipherText = data.copyOfRange(payloadStart, cipherEnd)
         val payloadCounter = data.copyOfRange(data.size - 7, data.size - 4)
         val tag = data.copyOfRange(data.size - 4, data.size)
         val nonce = ByteArray(12).also {
-            System.arraycopy(data, 5, it, 0, 6)
+            System.arraycopy(macBytesForNonce, 0, it, 0, 6)
             System.arraycopy(data, 2, it, 6, 3)
             System.arraycopy(payloadCounter, 0, it, 9, 3)
         }
@@ -135,6 +149,13 @@ object MiBeaconV5 {
         n += ccm.doFinal(out, n)
         out.copyOf(n)
     }.getOrNull()
+
+    private fun parseMac(address: String?): ByteArray? {
+        if (address.isNullOrBlank()) return null
+        val parts = address.split(':')
+        if (parts.size != 6) return null
+        return runCatching { ByteArray(6) { i -> parts[i].toInt(16).toByte() } }.getOrNull()
+    }
 
     private fun u16le(b: ByteArray, off: Int) =
         (b[off].toInt() and 0xff) or ((b[off + 1].toInt() and 0xff) shl 8)
