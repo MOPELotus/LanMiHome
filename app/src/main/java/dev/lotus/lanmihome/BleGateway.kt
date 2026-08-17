@@ -30,6 +30,9 @@ data class BleDiagState(
     val lastRssi: Int? = null,
     val lastProductId: Int? = null,
     val lastRaw: String = "",
+    val sensorLastSeenMs: Long = 0,
+    val sensorLastRssi: Int? = null,
+    val sensorLastRaw: String = "",
     val lastError: String? = null,
 )
 
@@ -54,6 +57,9 @@ object BleGateway {
             lastRssi = if (p.contains("last_rssi")) p.getInt("last_rssi", 0) else null,
             lastProductId = if (p.contains("last_product_id")) p.getInt("last_product_id", 0) else null,
             lastRaw = p.getString("last_raw", "") ?: "",
+            sensorLastSeenMs = p.getLong("sensor_last_seen_ms", 0),
+            sensorLastRssi = if (p.contains("sensor_last_rssi")) p.getInt("sensor_last_rssi", 0) else null,
+            sensorLastRaw = p.getString("sensor_last_raw", "") ?: "",
             lastError = p.getString("last_error", null),
         )
     }
@@ -67,6 +73,9 @@ object BleGateway {
             .remove("last_rssi")
             .remove("last_product_id")
             .remove("last_raw")
+            .remove("sensor_last_seen_ms")
+            .remove("sensor_last_rssi")
+            .remove("sensor_last_raw")
             .remove("last_error")
             .apply()
     }
@@ -135,29 +144,42 @@ object BleGateway {
         var lastRssi: Int? = if (p.contains("last_rssi")) p.getInt("last_rssi", 0) else null
         var lastProductId: Int? = if (p.contains("last_product_id")) p.getInt("last_product_id", 0) else null
         var lastRaw = p.getString("last_raw", "") ?: ""
+        var sensorLastSeen = p.getLong("sensor_last_seen_ms", 0)
+        var sensorLastRssi: Int? = if (p.contains("sensor_last_rssi")) p.getInt("sensor_last_rssi", 0) else null
+        var sensorLastRaw = p.getString("sensor_last_raw", "") ?: ""
 
         for (result in results) {
             val data = result.scanRecord?.getServiceData(MI_BEACON_UUID) ?: continue
+            val now = System.currentTimeMillis()
             total++
             val productId = if (data.size >= 4) {
                 (data[2].toInt() and 0xff) or ((data[3].toInt() and 0xff) shl 8)
             } else null
-            if (productId == PRODUCT_ID_MJWSD06MMC) sensor++
-            lastSeen = System.currentTimeMillis()
+            val raw = data.joinToString("") { "%02x".format(it.toInt() and 0xff) }
+            if (productId == PRODUCT_ID_MJWSD06MMC) {
+                sensor++
+                sensorLastSeen = now
+                sensorLastRssi = result.rssi
+                sensorLastRaw = raw
+            }
+            lastSeen = now
             lastRssi = result.rssi
             lastProductId = productId
-            lastRaw = data.joinToString("") { "%02x".format(it.toInt() and 0xff) }
+            lastRaw = raw
         }
 
         p.edit()
             .putLong("total_packets", total)
             .putLong("sensor_packets", sensor)
             .putLong("last_seen_ms", lastSeen)
+            .putLong("sensor_last_seen_ms", sensorLastSeen)
             .apply {
                 if (lastRssi != null) putInt("last_rssi", lastRssi)
                 if (lastProductId != null) putInt("last_product_id", lastProductId)
+                if (sensorLastRssi != null) putInt("sensor_last_rssi", sensorLastRssi)
             }
             .putString("last_raw", lastRaw)
+            .putString("sensor_last_raw", sensorLastRaw)
             .putString("last_error", errorCode?.takeIf { it != 0 }?.let { "BLE callback error=$it" })
             .commit()
     }
