@@ -102,17 +102,22 @@ class BleGatewayService : Service() {
 
         runCatching { scanner.stopScan(callback) }
 
-        // Android suspends unfiltered BLE scans when the screen turns off.
-        // A real ScanFilter keeps the hardware/controller scan eligible in screen-off mode.
-        // We only need Xiaomi MiBeacon service data, so filtering FE95 is both cheaper and
-        // more reliable than scanning every BLE advertiser around the phone.
+        // FE95 is carried as Service Data (AD type 0x16), not necessarily in the
+        // advertised GATT Service UUID list. Filtering with setServiceUuid(FE95)
+        // can therefore match nothing on some Android Bluetooth stacks.
+        // Match the FE95 service-data field itself. A zero mask makes the first
+        // payload byte a wildcard while still requiring FE95 service data to exist.
         val filters = listOf(
             ScanFilter.Builder()
-                .setServiceUuid(MI_BEACON_UUID)
+                .setServiceData(
+                    MI_BEACON_UUID,
+                    byteArrayOf(0),
+                    byteArrayOf(0),
+                )
                 .build()
         )
         val settings = ScanSettings.Builder()
-            .setScanMode(ScanSettings.SCAN_MODE_LOW_POWER)
+            .setScanMode(ScanSettings.SCAN_MODE_BALANCED)
             .setCallbackType(ScanSettings.CALLBACK_TYPE_ALL_MATCHES)
             .setReportDelay(0)
             .build()
