@@ -11,11 +11,29 @@ android {
         applicationId = "dev.lotus.lanmihome"
         minSdk = 26
         targetSdk = 36
-        versionCode = 2
-        versionName = "1.1.0"
+        versionCode = 3
+        versionName = "1.2.0"
     }
 
-    buildFeatures { compose = true }
+    flavorDimensions += "role"
+    productFlavors {
+        create("gateway") {
+            dimension = "role"
+            buildConfigField("boolean", "CLIENT_ONLY", "false")
+            versionNameSuffix = "-gateway"
+        }
+        create("client") {
+            dimension = "role"
+            applicationIdSuffix = ".client"
+            buildConfigField("boolean", "CLIENT_ONLY", "true")
+            versionNameSuffix = "-client"
+        }
+    }
+
+    buildFeatures {
+        compose = true
+        buildConfig = true
+    }
 
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
