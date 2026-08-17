@@ -22,7 +22,14 @@ class ChargerConfig:
 
 
 class ChargerManager:
-    """Run one independent reconnecting task per charger."""
+    """Run one independent reconnecting task per charger.
+
+    The steady-state GATT sessions run concurrently, but connection/service discovery/
+    authentication is serialized.  Bleak may perform an implicit discovery when a
+    client is constructed from an address, and overlapping WinRT discovery/service
+    setup proved racy with multiple AD1204 chargers.  Keeping only the setup phase
+    behind a lock preserves multi-device operation while avoiding that race.
+    """
 
     def __init__(
         self,
@@ -36,6 +43,7 @@ class ChargerManager:
         self.on_state = on_state
         self.raw = raw
         self._stop = asyncio.Event()
+        self._setup_lock = asyncio.Lock()
         self.sessions: dict[str, CuktechSession] = {}
 
     async def run(self) -> None:
@@ -58,15 +66,22 @@ class ChargerManager:
             session = CuktechSession(cfg.name, cfg.address, cfg.token)
             self.sessions[cfg.name] = session
             try:
-                await self._emit_state(cfg.name, "connecting")
-                await session.connect()
-                info = await session.read_device_info()
-                await self._emit_state(
-                    cfg.name,
-                    f"connected model={info.model or '?'} fw={info.firmware or '?'}",
-                )
-                await session.authenticate()
-                await self._emit_state(cfg.name, "authenticated")
+                # WinRT/Bleak can race when two address-based BleakClient.connect()
+                # calls both trigger discovery/service setup.  Serialize only this
+                # phase; once authenticated, all sessions stream concurrently.
+                async with self._setup_lock:
+                    if self._stop.is_set():
+                        break
+                    await self._emit_state(cfg.name, "connecting")
+                    await session.connect()
+                    info = await session.read_device_info()
+                    await self._emit_state(
+                        cfg.name,
+                        f"connected model={info.model or '?'} fw={info.firmware or '?'}",
+                    )
+                    await session.authenticate()
+                    await self._emit_state(cfg.name, "authenticated")
+
                 delay = 2.0
 
                 while not self._stop.is_set() and session.connected:
