@@ -48,15 +48,19 @@ object MiBeaconV5 {
         val macBytes = data.copyOfRange(5, 11)
         val mac = macBytes.reversedArray().joinToString(":") { "%02X".format(it.toInt() and 0xff) }
         val encrypted = (data[0].toInt() and 0x08) != 0
+        val hasCapability = (data[0].toInt() and 0x20) != 0
+        val payloadStart = if (hasCapability) 12 else 11
         val raw = data.hex()
 
         val plain = if (encrypted) {
-            if (bindKey == null || bindKey.size != 16 || data.size < 18) {
+            if (bindKey == null || bindKey.size != 16 || data.size < payloadStart + 7) {
                 return MiBeaconSensorFrame(pid, frameCounter, mac, true, false, raw = raw)
             }
-            decrypt(data, bindKey) ?: return MiBeaconSensorFrame(pid, frameCounter, mac, true, false, raw = raw)
+            decrypt(data, bindKey, payloadStart)
+                ?: return MiBeaconSensorFrame(pid, frameCounter, mac, true, false, raw = raw)
         } else {
-            data.copyOfRange(11, data.size)
+            if (payloadStart > data.size) return null
+            data.copyOfRange(payloadStart, data.size)
         }
 
         var temperature: Double? = null
@@ -70,6 +74,7 @@ object MiBeaconV5 {
             val end = start + len
             if (end > plain.size) break
             when (type) {
+                // Classic Xiaomi MiBeacon object IDs.
                 0x1004 -> if (len >= 2) temperature = s16le(plain, start) / 10.0
                 0x1006 -> if (len >= 2) humidity = u16le(plain, start) / 10.0
                 0x100A -> if (len >= 1) battery = plain[start].toInt() and 0xff
@@ -77,6 +82,20 @@ object MiBeaconV5 {
                     temperature = s16le(plain, start) / 10.0
                     humidity = u16le(plain, start + 2) / 10.0
                 }
+
+                // Newer MiaoMiaoCe/Xiaomi thermometers also use the 0x4Cxx/
+                // 0x48xx object family. MJWSD06MMC emits these on stock firmware.
+                // ESPHome's Xiaomi BLE parser uses the same interpretations.
+                0x4C01 -> if (len >= 4) {
+                    val v = Float.fromBits(u32le(plain, start)).toDouble()
+                    if (v.isFinite() && v in -80.0..120.0) temperature = v
+                }
+                0x4C02 -> if (len >= 1) humidity = (plain[start].toInt() and 0xff).toDouble()
+                0x4C08 -> if (len >= 4) {
+                    val v = Float.fromBits(u32le(plain, start)).toDouble()
+                    if (v.isFinite() && v in 0.0..100.0) humidity = v
+                }
+                0x4803 -> if (len >= 1) battery = plain[start].toInt() and 0xff
             }
             off = end
         }
@@ -95,10 +114,10 @@ object MiBeaconV5 {
         )
     }
 
-    private fun decrypt(data: ByteArray, key: ByteArray): ByteArray? = runCatching {
+    private fun decrypt(data: ByteArray, key: ByteArray, payloadStart: Int): ByteArray? = runCatching {
         val cipherEnd = data.size - 7
-        if (cipherEnd < 11) return null
-        val cipherText = data.copyOfRange(11, cipherEnd)
+        if (cipherEnd < payloadStart) return null
+        val cipherText = data.copyOfRange(payloadStart, cipherEnd)
         val payloadCounter = data.copyOfRange(data.size - 7, data.size - 4)
         val tag = data.copyOfRange(data.size - 4, data.size)
         val nonce = ByteArray(12).also {
@@ -117,6 +136,12 @@ object MiBeaconV5 {
 
     private fun u16le(b: ByteArray, off: Int) =
         (b[off].toInt() and 0xff) or ((b[off + 1].toInt() and 0xff) shl 8)
+
+    private fun u32le(b: ByteArray, off: Int): Int =
+        (b[off].toInt() and 0xff) or
+            ((b[off + 1].toInt() and 0xff) shl 8) or
+            ((b[off + 2].toInt() and 0xff) shl 16) or
+            ((b[off + 3].toInt() and 0xff) shl 24)
 
     private fun s16le(b: ByteArray, off: Int): Int {
         val u = u16le(b, off)
