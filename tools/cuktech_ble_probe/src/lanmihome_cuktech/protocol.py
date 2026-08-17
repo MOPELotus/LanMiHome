@@ -37,9 +37,8 @@ def mac_to_miot_bytes(address: str) -> bytes:
 def parse_port_push(plaintext: bytes) -> PortReading | None:
     """Decode an AD1204 real-time port push.
 
-    The last four plaintext bytes are status, protocol-code, current and
-    voltage. protocol_hint intentionally stays conservative because the
-    charger's raw protocol code is ambiguous for some PD/QC/PPS states.
+    Push frames use MiOT result opcode 0x04.  The final four plaintext bytes
+    are status, protocol-code, current and voltage.
     """
     if len(plaintext) < 12 or plaintext[4] != 0x04:
         return None
@@ -48,6 +47,50 @@ def parse_port_push(plaintext: bytes) -> PortReading | None:
         return None
 
     status_raw, code_raw, current_raw, voltage_raw = plaintext[-4:]
+    return _make_port_reading(
+        piid,
+        status_raw,
+        code_raw,
+        current_raw,
+        voltage_raw,
+        plaintext.hex(),
+    )
+
+
+def parse_port_value(
+    piid: int,
+    value: int,
+    plaintext: bytes | None = None,
+) -> PortReading | None:
+    """Decode a PIID 1..4 active-GET value.
+
+    AD1204 returns each port property as a little-endian UINT32 whose bytes are
+    [status, protocol-code, current_raw, voltage_raw].  This is the same payload
+    carried at the end of change-triggered push frames, so active polling and
+    Notify updates share one PortReading representation.
+    """
+    if piid not in PORT_NAMES or value < 0 or value > 0xFFFFFFFF:
+        return None
+    raw = value.to_bytes(4, "little")
+    status_raw, code_raw, current_raw, voltage_raw = raw
+    return _make_port_reading(
+        piid,
+        status_raw,
+        code_raw,
+        current_raw,
+        voltage_raw,
+        plaintext.hex() if plaintext else "",
+    )
+
+
+def _make_port_reading(
+    piid: int,
+    status_raw: int,
+    code_raw: int,
+    current_raw: int,
+    voltage_raw: int,
+    plaintext_hex: str,
+) -> PortReading:
     voltage = voltage_raw / 10.0
     current = current_raw / 10.0
     power = round(voltage * current, 2)
@@ -63,7 +106,7 @@ def parse_port_push(plaintext: bytes) -> PortReading | None:
         status_raw=status_raw,
         code_raw=code_raw,
         protocol_hint=_protocol_hint(piid, voltage, code_raw, active),
-        plaintext_hex=plaintext.hex(),
+        plaintext_hex=plaintext_hex,
     )
 
 
