@@ -68,7 +68,7 @@ fun LanMiHomeApp() {
             Tab.FAN -> FanScreen(fan,recovery,!busy,
                 patch={pairs->command{api.patchFan(*pairs)}}, action={n->command{api.fanAction(n)}}, recover={command{api.forceRecovery()}})
             Tab.LAMP -> LampScreen(lamp,!busy,patch={pairs->command{api.patchLamp(*pairs)}},action={n,v->command{api.lampAction(n,v)}})
-            Tab.SENSOR -> SensorScreen(sensor)
+            Tab.SENSOR -> if (BuildConfig.CLIENT_ONLY) ClientSensorScreen(sensor) else SensorScreen(sensor)
         }
         if(busy) LinearProgressIndicator(Modifier.fillMaxWidth())
     }}
