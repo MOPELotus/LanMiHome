@@ -102,11 +102,17 @@ object BleGateway {
         val adapter = manager.adapter ?: return "设备不支持蓝牙"
         val scanner = adapter.bluetoothLeScanner ?: return "蓝牙未开启或 BLE 扫描不可用"
 
-        // Match any advertisement carrying MiBeacon FE95 service data. An empty
-        // service-data prefix matches any payload for this UUID.
+        // Match any advertisement that contains FE95 service data. Do not use a
+        // zero-length serviceData value here: vendor BLE stacks differ in how they
+        // interpret it. A one-byte, all-zero mask means the FE95 field must exist,
+        // while no payload bit is required to equal a specific value.
         val filters = listOf(
             ScanFilter.Builder()
-                .setServiceData(MI_BEACON_UUID, byteArrayOf())
+                .setServiceData(
+                    MI_BEACON_UUID,
+                    byteArrayOf(0),
+                    byteArrayOf(0),
+                )
                 .build()
         )
         val settings = ScanSettings.Builder()
