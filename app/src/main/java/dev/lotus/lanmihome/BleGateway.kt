@@ -33,6 +33,14 @@ data class BleGatewayState(
     val lastUploadMs: Long = 0,
     val lastUploadError: String? = null,
     val lastError: String? = null,
+    val wakeLock: Boolean = false,
+    val wifiLock: Boolean = false,
+    val scanRestarts: Long = 0,
+    val lastScanRestartReason: String? = null,
+    val lastScanRestartMs: Long = 0,
+    val rootKeepAliveStatus: String? = null,
+    val rootKeepAliveMs: Long = 0,
+    val lastKeepAliveEvent: String? = null,
 )
 
 object BleGateway {
@@ -79,6 +87,14 @@ object BleGateway {
             lastUploadMs = p.getLong("last_upload_ms", 0),
             lastUploadError = p.getString("last_upload_error", null),
             lastError = p.getString("last_error", null),
+            wakeLock = p.getBoolean("wake_lock", false),
+            wifiLock = p.getBoolean("wifi_lock", false),
+            scanRestarts = p.getLong("scan_restarts", 0),
+            lastScanRestartReason = p.getString("last_scan_restart_reason", null),
+            lastScanRestartMs = p.getLong("last_scan_restart_ms", 0),
+            rootKeepAliveStatus = p.getString("root_keepalive_status", null),
+            rootKeepAliveMs = p.getLong("root_keepalive_ms", 0),
+            lastKeepAliveEvent = p.getString("last_keepalive_event", null),
         )
     }
 
@@ -132,6 +148,10 @@ object BleGateway {
             .remove("last_fail_seen_ms")
             .remove("last_error")
             .remove("last_upload_error")
+            .remove("scan_restarts")
+            .remove("last_scan_restart_reason")
+            .remove("last_scan_restart_ms")
+            .remove("last_keepalive_event")
             .apply()
     }
 }
