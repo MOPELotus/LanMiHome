@@ -10,7 +10,7 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
 private const val DEFAULT_URL="http://10.0.0.1:8765"
-private enum class Tab { FAN, LAMP }
+private enum class Tab { FAN, LAMP, BLE }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -30,34 +30,41 @@ fun LanMiHomeApp() {
     val api=remember(baseUrl){LanMiHomeApi(baseUrl)}
 
     suspend fun refresh(silent:Boolean=true) {
+        if(tab==Tab.BLE) return
         try {
-            when(tab) { Tab.FAN->fan=api.fan(); Tab.LAMP->lamp=api.lamp() }
+            when(tab) { Tab.FAN->fan=api.fan(); Tab.LAMP->lamp=api.lamp(); Tab.BLE->Unit }
             recovery=runCatching{api.recovery()}.getOrNull()
             online=true
         } catch(e:Exception) {
             online=false
-            if(tab==Tab.FAN) fan=FanState(false,e.message) else lamp=LampState(false,e.message)
+            if(tab==Tab.FAN) fan=FanState(false,e.message) else if(tab==Tab.LAMP) lamp=LampState(false,e.message)
             if(!silent) snack.showSnackbar("连接失败：${e.message}")
         }
     }
     fun command(block:suspend()->Unit) { scope.launch { busy=true; try { block(); refresh() } catch(e:Exception){snack.showSnackbar("操作失败：${e.message}")} finally{busy=false} } }
 
-    LaunchedEffect(baseUrl,tab) { while(isActive){ if(!busy) refresh(); delay(5000) } }
+    LaunchedEffect(baseUrl,tab) {
+        if(tab!=Tab.BLE) while(isActive){ if(!busy) refresh(); delay(5000) }
+    }
 
     Scaffold(
         snackbarHost={SnackbarHost(snack)},
         topBar={TopAppBar(title={Column{Text("LAN 米家");Text(if(online)"服务端已连接" else "服务端未连接",style=MaterialTheme.typography.labelSmall)}},actions={
-            TextButton(onClick={scope.launch{refresh(false)}}){Text("刷新")}
+            if(tab!=Tab.BLE) TextButton(onClick={scope.launch{refresh(false)}}){Text("刷新")}
             TextButton(onClick={settings=true}){Text("设置")}
         })},
         bottomBar={NavigationBar{
             NavigationBarItem(tab==Tab.FAN,{tab=Tab.FAN},icon={Text("◉")},label={Text("风扇")})
             NavigationBarItem(tab==Tab.LAMP,{tab=Tab.LAMP},icon={Text("●")},label={Text("台灯")})
+            NavigationBarItem(tab==Tab.BLE,{tab=Tab.BLE},icon={Text("⌁")},label={Text("BLE")})
         }}
     ){padding -> Box(Modifier.fillMaxSize().padding(padding)) {
-        if(tab==Tab.FAN) FanScreen(fan,recovery,!busy,
-            patch={pairs->command{api.patchFan(*pairs)}}, action={n->command{api.fanAction(n)}}, recover={command{api.forceRecovery()}})
-        else LampScreen(lamp,!busy,patch={pairs->command{api.patchLamp(*pairs)}},action={n,v->command{api.lampAction(n,v)}})
+        when(tab) {
+            Tab.FAN -> FanScreen(fan,recovery,!busy,
+                patch={pairs->command{api.patchFan(*pairs)}}, action={n->command{api.fanAction(n)}}, recover={command{api.forceRecovery()}})
+            Tab.LAMP -> LampScreen(lamp,!busy,patch={pairs->command{api.patchLamp(*pairs)}},action={n,v->command{api.lampAction(n,v)}})
+            Tab.BLE -> BleScreen()
+        }
         if(busy) LinearProgressIndicator(Modifier.fillMaxWidth())
     }}
 
