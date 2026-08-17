@@ -12,6 +12,7 @@ import org.json.JSONObject
 
 private fun JSONObject.boolOrNull(k: String) = if (has(k) && !isNull(k)) getBoolean(k) else null
 private fun JSONObject.intOrNull(k: String) = if (has(k) && !isNull(k)) getInt(k) else null
+private fun JSONObject.longOrNull(k: String) = if (has(k) && !isNull(k)) getLong(k) else null
 private fun JSONObject.doubleOrNull(k: String) = if (has(k) && !isNull(k)) getDouble(k) else null
 private fun JSONObject.stringOrNull(k: String) = if (has(k) && !isNull(k)) getString(k).takeIf { it.isNotBlank() } else null
 
@@ -50,6 +51,41 @@ data class LampState(
     ) }
 }
 
+data class SensorState(
+    val available: Boolean,
+    val temperature: Double? = null,
+    val humidity: Double? = null,
+    val battery: Int? = null,
+    val rssi: Int? = null,
+    val mac: String? = null,
+    val ageSeconds: Long? = null,
+    val receivedAt: String? = null,
+    val reports: Long = 0,
+) {
+    companion object { fun from(j: JSONObject) = SensorState(
+        available = j.optBoolean("available", false),
+        temperature = j.doubleOrNull("temperature"),
+        humidity = j.doubleOrNull("humidity"),
+        battery = j.intOrNull("battery"),
+        rssi = j.intOrNull("rssi"),
+        mac = j.stringOrNull("mac"),
+        ageSeconds = j.longOrNull("age_seconds"),
+        receivedAt = j.stringOrNull("received_at"),
+        reports = j.optLong("reports", 0),
+    ) }
+}
+
+data class SensorReport(
+    val temperature: Double? = null,
+    val humidity: Double? = null,
+    val battery: Int? = null,
+    val rssi: Int,
+    val mac: String,
+    val frameCounter: Int,
+    val raw: String,
+    val seenAtMs: Long,
+)
+
 data class RecoveryState(val active:Boolean, val success:Boolean, val attempts:Int, val reason:String?, val error:String?) {
     companion object { fun from(j: JSONObject)=RecoveryState(
         j.optBoolean("active"), j.optBoolean("success"), j.optInt("attempts"),
@@ -69,6 +105,7 @@ class LanMiHomeApi(rawBase: String) {
 
     suspend fun fan() = FanState.from(request("GET", "/api/v1/fan"))
     suspend fun lamp() = LampState.from(request("GET", "/api/v1/lamp"))
+    suspend fun sensor() = SensorState.from(request("GET", "/api/v1/sensor"))
     suspend fun recovery() = RecoveryState.from(request("GET", "/api/v1/system/recovery"))
     suspend fun patchFan(vararg pairs: Pair<String, Any>) = request("PATCH", "/api/v1/fan", obj(*pairs))
     suspend fun patchLamp(vararg pairs: Pair<String, Any>) = request("PATCH", "/api/v1/lamp", obj(*pairs))
@@ -77,6 +114,22 @@ class LanMiHomeApi(rawBase: String) {
         "POST", "/api/v1/lamp/action", if(value==null) obj("name" to name) else obj("name" to name, "value" to value)
     )
     suspend fun forceRecovery() = request("POST", "/api/v1/system/recovery/start", obj("force" to true))
+
+    suspend fun reportSensor(report: SensorReport): JSONObject {
+        val j = JSONObject()
+            .put("model", "xiaomi.sensor_ht.mini")
+            .put("product_id", SENSOR_PRODUCT_ID)
+            .put("rssi", report.rssi)
+            .put("mac", report.mac)
+            .put("frame_counter", report.frameCounter)
+            .put("raw", report.raw)
+            .put("seen_at_ms", report.seenAtMs)
+            .put("source", "android-ble-gateway")
+        report.temperature?.let { j.put("temperature", it) }
+        report.humidity?.let { j.put("humidity", it) }
+        report.battery?.let { j.put("battery", it) }
+        return request("POST", "/api/v1/sensor/report", j)
+    }
 
     private fun obj(vararg pairs: Pair<String, Any>) = JSONObject().apply { pairs.forEach { put(it.first, it.second) } }
 

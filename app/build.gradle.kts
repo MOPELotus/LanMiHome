@@ -11,8 +11,8 @@ android {
         applicationId = "dev.lotus.lanmihome"
         minSdk = 26
         targetSdk = 36
-        versionCode = 1
-        versionName = "1.0.0"
+        versionCode = 2
+        versionName = "1.1.0"
     }
 
     buildFeatures { compose = true }
@@ -34,5 +34,6 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2")
     implementation(platform("com.squareup.okhttp3:okhttp-bom:5.3.0"))
     implementation("com.squareup.okhttp3:okhttp")
+    implementation("org.bouncycastle:bcprov-jdk18on:1.84")
     debugImplementation("androidx.compose.ui:ui-tooling")
 }
