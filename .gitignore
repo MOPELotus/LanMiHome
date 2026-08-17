@@ -3,3 +3,8 @@
 local.properties
 **/build/
 *.iml
+
+# Local BLE device credentials / Python probe environment
+tools/cuktech_ble_probe/chargers.toml
+tools/cuktech_ble_probe/.venv/
+tools/cuktech_ble_probe/**/__pycache__/
