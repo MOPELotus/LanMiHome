@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections import deque
 from dataclasses import dataclass
 
 from .miot import MiotCommandClient, MiotResult
@@ -36,6 +37,7 @@ class CuktechController:
         self.session = CuktechSession(name, address, token)
         self.miot = MiotCommandClient(self.session)
         self.state = ChargerState()
+        self._pending_events: deque[DeviceEvent] = deque()
 
     @property
     def connected(self) -> bool:
@@ -63,7 +65,25 @@ class CuktechController:
         self.state.connected = False
         self.state.authenticated = False
 
+    async def drain_initial_events(self) -> list[DeviceEvent]:
+        """Process authentication-time Notify frames before issuing fresh GETs.
+
+        CuktechSession ACKs and preserves these frames during authentication.
+        Processing them first keeps device-counter order natural; subsequent
+        active GETs then become the authoritative fresh snapshot.
+        """
+        events: list[DeviceEvent] = []
+        while self.session._init_frames:
+            plaintext = await self.session.next_plaintext(timeout=0.0)
+            if plaintext is None:
+                continue
+            event = self.process_plaintext(plaintext)
+            if event is not None:
+                events.append(event)
+        return events
+
     async def initialize_state(self) -> list[PortReading]:
+        await self.drain_initial_events()
         await self.refresh_settings()
         return await self.refresh_ports()
 
@@ -198,9 +218,20 @@ class CuktechController:
         return DeviceEvent("property", property=prop)
 
     def process_deferred(self, result: MiotResult) -> list[DeviceEvent]:
+        """Apply Notify frames that arrived while a GET/SET owned cmd_recv.
+
+        They are also queued as DeviceEvents so ChargerManager can emit them to
+        callers instead of silently updating state and losing a live UI event.
+        """
         events: list[DeviceEvent] = []
         for plaintext in result.deferred_plaintexts:
             event = self.process_plaintext(plaintext)
             if event is not None:
                 events.append(event)
+                self._pending_events.append(event)
+        return events
+
+    def drain_pending_events(self) -> list[DeviceEvent]:
+        events = list(self._pending_events)
+        self._pending_events.clear()
         return events

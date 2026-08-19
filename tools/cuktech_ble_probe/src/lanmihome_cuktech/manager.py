@@ -6,7 +6,7 @@ import time
 from dataclasses import dataclass
 from typing import Awaitable, Callable
 
-from .controller import CuktechController
+from .controller import CuktechController, DeviceEvent
 from .protocol import PortReading
 from .session import AuthenticationError
 from .state import ChargerState
@@ -100,7 +100,14 @@ class ChargerManager:
 
                 delay = 2.0
 
+                # Authentication captures/ACKs the charger's initial Notify burst.
+                # Process it before fresh GETs so old frames never overwrite the
+                # authoritative startup snapshot that follows.
+                for event in await controller.drain_initial_events():
+                    await self._emit_device_event(cfg.name, controller, event, last_seen)
+
                 await controller.refresh_settings()
+                await self._emit_pending_events(cfg.name, controller, last_seen)
                 last_settings_refresh = time.monotonic()
                 await self._emit_settings(cfg.name, controller.state)
 
@@ -110,6 +117,7 @@ class ChargerManager:
                     reading, result = await controller.poll_port_result(piid)
                     last_poll[piid] = time.monotonic()
                     self._log_get(cfg.name, reading, result.raw)
+                    await self._emit_pending_events(cfg.name, controller, last_seen)
                     if reading is not None:
                         last_seen[piid] = time.monotonic()
                         await self._emit_reading(cfg.name, reading)
@@ -121,20 +129,17 @@ class ChargerManager:
                         if self.raw:
                             _LOG.info("[%s] RX %s", cfg.name, plaintext.hex())
                         event = controller.process_plaintext(plaintext)
-                        if event and event.port is not None:
-                            last_seen[event.port.piid] = now
-                            await self._emit_reading(cfg.name, event.port)
-                        elif event and event.property is not None:
-                            await self._emit_settings(cfg.name, controller.state)
-                            # PIID 17/18 contain the exact hardware protocol codes.
-                            # Re-read the affected ports immediately so protocol labels
-                            # switch without waiting for the next power-change Notify.
-                            if event.property.piid in (17, 18):
+                        if event is not None:
+                            await self._emit_device_event(cfg.name, controller, event, last_seen)
+                            # PIID 17/18 contain exact hardware protocol codes. Re-read
+                            # the affected pair so labels change immediately.
+                            if event.property and event.property.piid in (17, 18):
                                 affected = (1, 2) if event.property.piid == 17 else (3, 4)
                                 for piid in affected:
                                     reading, result = await controller.poll_port_result(piid)
                                     last_poll[piid] = time.monotonic()
                                     self._log_get(cfg.name, reading, result.raw)
+                                    await self._emit_pending_events(cfg.name, controller, last_seen)
                                     if reading is not None:
                                         last_seen[piid] = time.monotonic()
                                         await self._emit_reading(cfg.name, reading)
@@ -144,6 +149,7 @@ class ChargerManager:
                         # busy stream of real-time port Notify frames.
                         if now - last_settings_refresh >= self.SETTINGS_REFRESH_AFTER:
                             await controller.refresh_settings()
+                            await self._emit_pending_events(cfg.name, controller, last_seen)
                             last_settings_refresh = time.monotonic()
                             await self._emit_settings(cfg.name, controller.state)
 
@@ -156,6 +162,7 @@ class ChargerManager:
                         reading, result = await controller.poll_port_result(candidate)
                         last_poll[candidate] = time.monotonic()
                         self._log_get(cfg.name, reading, result.raw)
+                        await self._emit_pending_events(cfg.name, controller, last_seen)
                         if reading is not None:
                             last_seen[candidate] = time.monotonic()
                             await self._emit_reading(cfg.name, reading)
@@ -175,6 +182,28 @@ class ChargerManager:
                 break
             await asyncio.sleep(delay)
             delay = min(delay * 2.0, 30.0)
+
+    async def _emit_device_event(
+        self,
+        name: str,
+        controller: CuktechController,
+        event: DeviceEvent,
+        last_seen: dict[int, float],
+    ) -> None:
+        if event.port is not None:
+            last_seen[event.port.piid] = time.monotonic()
+            await self._emit_reading(name, event.port)
+        elif event.property is not None:
+            await self._emit_settings(name, controller.state)
+
+    async def _emit_pending_events(
+        self,
+        name: str,
+        controller: CuktechController,
+        last_seen: dict[int, float],
+    ) -> None:
+        for event in controller.drain_pending_events():
+            await self._emit_device_event(name, controller, event, last_seen)
 
     def _stale_candidate(
         self,
