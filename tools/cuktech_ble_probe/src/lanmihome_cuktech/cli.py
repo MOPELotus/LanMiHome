@@ -272,13 +272,19 @@ async def cmd_monitor(configs: list[ChargerConfig], raw: bool) -> None:
             reading.current,
             reading.power,
             reading.protocol_hint,
+            reading.protocol_number,
+            reading.protocol_source,
             reading.status_raw,
             reading.shared,
         )
         if last.get(key) == value:
             return
         last[key] = value
-        source = "HW" if reading.protocol_source == "hardware" else "guess"
+        source = {
+            "hardware": "HW",
+            "heuristic": "guess",
+            "no-load": "idle",
+        }.get(reading.protocol_source, reading.protocol_source)
         shared = " shared" if reading.shared else ""
         print(
             f"[{name}] {reading.name:>4} {reading.voltage:5.1f} V  {reading.current:4.1f} A  "
