@@ -12,18 +12,20 @@ on:
 
 jobs:
   python:
-    runs-on: windows-latest
+    strategy:
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - name: Install probe
-        shell: pwsh
+      - name: Install core
         run: python -m pip install -e tools/cuktech_ble_probe
       - name: Compile
-        shell: pwsh
         run: python -m compileall -q tools/cuktech_ble_probe/src
+      - name: Unit tests
+        run: python -m unittest discover -s tools/cuktech_ble_probe/tests -v
       - name: CLI smoke test
-        shell: pwsh
         run: python -m lanmihome_cuktech --help

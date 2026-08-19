@@ -1,26 +1,42 @@
-# CUKTECH BLE Probe
+# CUKTECH BLE Core
 
-A small, platform-neutral BLE core extracted for LanMiHome development. The first target is Windows + Intel BE200; the same Bleak-facing code is intended to move to BlueZ + CM390 on the router later.
+LanMiHome's platform-neutral, multi-device BLE implementation for the CUKTECH 10 GaN Charger Ultra (`njcuk.fitting.ad1204`). It is derived from the MIT-licensed reverse-engineering work in `kairui1108/cuktech-ble-ha`, but keeps LanMiHome's own multi-device architecture instead of the upstream single-charger server architecture.
 
-Current scope:
+The same Python core targets Windows/WinRT during development and BlueZ/USB HCI on the ImmortalWrt router later.
 
-- scan nearby BLE devices;
-- read AD1204 basic info;
+## Device-side feature coverage
+
+The BLE/device capability layer is now intended to cover the upstream feature set rather than only the original telemetry probe:
+
+- FE95 GATT discovery and device information;
 - MiOT BLE login/authentication;
-- keep multiple chargers connected concurrently;
-- decrypt real-time C1/C2/C3/A push frames;
-- actively GET all four ports after authentication so stable loads are visible immediately;
-- periodically re-sample stale ports because AD1204 normally reports stable power only when the value changes;
-- preserve live Notify frames that arrive while an active GET is in flight;
-- print voltage/current/power plus raw status/protocol bytes;
-- reconnect each charger independently;
-- optional plaintext-frame logging with `--raw`.
+- isolated per-device session keys, counters, queues and reconnect workers;
+- multiple AD1204 chargers connected concurrently;
+- C1/C2/C3/A voltage, current and power from Notify and active GET;
+- stable-load refresh: active ports are re-sampled when Notify becomes stale;
+- C3+A shared-output detection (`status_raw == 0x11`), represented as one `C3+A` aggregate measurement so total power is never double-counted;
+- exact hardware charging protocol state from PIID 17/18, with upstream/Mi Home-aligned fallback detection when hardware protocol state is unavailable;
+- 5V / QC / AFC / FCP / SCP / PD / PPS / UFCS protocol names;
+- PDO/protocol state decoding from PIID 17/18;
+- protocol-switch state and control from PIID 21:
+  - C1/C2: PD, PPS, UFCS;
+  - C3/A: UFCS, SCP;
+- scene mode (PIID 5);
+- screen timeout (PIID 6);
+- countdown configuration and per-port timers (PIID 8-12);
+- language (PIID 13);
+- screen-page jump (PIID 14, write-only);
+- USB-A low-current mode (PIID 15);
+- per-port/all-port output control (PIID 16);
+- idle screen-off (PIID 19);
+- screen orientation lock (PIID 20);
+- generic raw GET/SET for protocol research;
+- GATT service enumeration, auth test and full PIID probe;
+- command-channel serialization, preservation of interleaved Notify traffic, keepalive and per-device reconnect.
 
-This intentionally does **not** touch the Android app or router backend yet.
+This directory intentionally does **not** duplicate upstream's Home Assistant integration, MQTT/Bemfa bridge, Web UI, Docker packaging or SQLite history server. Those are application/integration layers; LanMiHome has its own router backend and Android client. The complete charger-facing BLE capability is exposed here for that backend to consume.
 
 ## Windows quick start
-
-Requires Python 3.11+ and a working Windows Bluetooth adapter (BE200 is fine).
 
 ```powershell
 cd tools\cuktech_ble_probe
@@ -28,84 +44,87 @@ py -3.11 -m venv .venv
 .\.venv\Scripts\Activate.ps1
 python -m pip install -e .
 
-python -m lanmihome_cuktech scan --seconds 10
-```
-
-Copy the config template and fill the credentials locally:
-
-```powershell
 Copy-Item config.example.toml chargers.toml
 notepad chargers.toml
 ```
 
-Do not commit or share `chargers.toml`.
+Keep `chargers.toml` local. Do not commit or share device tokens.
 
-Basic-info probe:
+### Discovery / diagnostics
 
 ```powershell
+python -m lanmihome_cuktech scan --seconds 10
 python -m lanmihome_cuktech info --config chargers.toml
+python -m lanmihome_cuktech services --config chargers.toml --device desk
+python -m lanmihome_cuktech auth --config chargers.toml --device desk
+python -m lanmihome_cuktech status --config chargers.toml --device desk
+python -m lanmihome_cuktech probe --config chargers.toml --device desk
+python -m lanmihome_cuktech get --config chargers.toml --device desk 18
 ```
 
-Keep both configured chargers connected and monitor port telemetry:
+### Multi-device monitoring
 
 ```powershell
 python -m lanmihome_cuktech monitor --config chargers.toml
+python -m lanmihome_cuktech monitor --config chargers.toml --device desk --raw
 ```
 
-Only one configured charger:
+`--raw` logs decrypted `RX` frames and active `GET` responses. `-v` enables LanMiHome CUKTECH debug logs without turning Bleak/WinRT into a wall of debug output; use `--bleak-debug` only when backend diagnostics are actually needed.
+
+AD1204 telemetry is primarily change-triggered. The monitor therefore does one complete port snapshot after authentication, then combines Notify updates with active refresh. Active ports are checked much more frequently than long-idle ports.
+
+### Controls
+
+All write commands target exactly one configured charger, so use `--device` when the config contains multiple chargers.
 
 ```powershell
-python -m lanmihome_cuktech monitor --config chargers.toml --device desk
+python -m lanmihome_cuktech set-mode     --config chargers.toml --device desk ai
+python -m lanmihome_cuktech set-screen   --config chargers.toml --device desk 10
+python -m lanmihome_cuktech set-language --config chargers.toml --device desk cn
+python -m lanmihome_cuktech set-usba     --config chargers.toml --device desk on
+python -m lanmihome_cuktech set-idle     --config chargers.toml --device desk on
+python -m lanmihome_cuktech set-orient   --config chargers.toml --device desk on
+python -m lanmihome_cuktech goto         --config chargers.toml --device desk 2
+python -m lanmihome_cuktech set-timer    --config chargers.toml --device desk c1 30
+python -m lanmihome_cuktech set-port     --config chargers.toml --device desk c3 off
+python -m lanmihome_cuktech set-protocol --config chargers.toml --device desk c1 pps off
 ```
 
-Include decrypted MiOT plaintext frames for protocol debugging. Normal Notify frames are logged as `RX`; active property reads are logged as `GET C1/C2/C3/A`:
+Raw protocol research remains available:
 
 ```powershell
-python -m lanmihome_cuktech -v monitor --config chargers.toml --raw
+python -m lanmihome_cuktech get --config chargers.toml --device desk 21
+python -m lanmihome_cuktech set --config chargers.toml --device desk 21 0x030C0C0F
 ```
 
-## Port refresh model
+## C3 + A shared-output semantics
 
-AD1204 port telemetry is primarily change-triggered. A stable USB-A load can therefore remain electrically active without emitting repeated Notify frames. The probe handles that by combining events with active reads:
+The real charger confirms the upstream `status_raw == 0x11` interpretation. When C3 and A are simultaneously loaded, the charger reports the combined electrical measurement on PIID 3 and PIID 4 becomes idle/suppressed. LanMiHome therefore models it as:
 
 ```text
-authentication complete
-        |
-        +-- GET C1
-        +-- GET C2
-        +-- GET C3
-        +-- GET A
-        |
-        +-- normal Notify updates immediately
-        |
-        +-- if a port has no fresh reading for ~15 s,
-            actively GET one stale port at a time
+C3 + A  5.1 V / 3.2 A / 16.3 W  shared
 ```
 
-The CLI suppresses duplicate displayed values, so active refreshes do not spam the terminal when voltage/current remain unchanged. `--raw` still shows the corresponding GET response for protocol diagnostics.
+The aggregate is counted once in charger total power. The protocol does not provide a reliable per-device current split in this shared mode, so the core does not invent one.
 
 ## Architecture
 
 ```text
 Bleak backend
-  Windows: WinRT / Intel BE200
-  Linux:   BlueZ / USB HCI (planned CM390)
+  Windows: WinRT / Intel adapter
+  Linux:   BlueZ / USB HCI
         |
-        +-- CuktechSession(name, address, token)  # one isolated MiOT session
-        |     +-- FE95 GATT
-        |     +-- MiOT BLE login
-        |     +-- per-device session keys/counters/notify queues
-        |
+        +-- CuktechSession                 # FE95 + authentication/crypto
+        +-- MiotCommandClient              # serialized encrypted GET/SET
+        +-- CuktechController              # complete AD1204 device API/state
         +-- ChargerManager
-              +-- charger A reconnect task
-              +-- charger B reconnect task
+              +-- charger A worker
+              +-- charger B worker
               +-- ...
 ```
 
-No BLE credential is stored globally. Each charger has its own token, GATT client, session keys, counters and notification queues, so multi-device support is part of the core rather than bolted onto a single-device server.
+No BLE credential or cryptographic state is global. Every charger owns its own GATT client, auth state, session keys, counters and notification queues.
 
-## Notes
+## Attribution
 
-The protocol implementation is derived from the reverse-engineering work in `kairui1108/cuktech-ble-ha` (MIT). See `THIRD_PARTY_NOTICES.md`.
-
-The first probe deliberately treats protocol detection as a hint. Voltage/current/power and raw bytes are the important data for initial validation; exact PD/PPS/UFCS/SCP classification can be brought over after the BLE session is proven stable on both Windows and BlueZ.
+Protocol behavior is derived from `kairui1108/cuktech-ble-ha` under the MIT license. See `THIRD_PARTY_NOTICES.md`.

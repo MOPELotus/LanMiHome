@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "lanmihome-cuktech-ble-probe"
-version = "0.1.0"
-description = "Minimal multi-device CUKTECH AD1204 BLE probe for LanMiHome"
+version = "0.2.0"
+description = "Complete multi-device CUKTECH AD1204 BLE core for LanMiHome"
 requires-python = ">=3.11"
 dependencies = [
     "bleak>=0.21",
