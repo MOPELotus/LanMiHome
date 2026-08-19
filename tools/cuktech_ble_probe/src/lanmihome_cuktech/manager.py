@@ -101,10 +101,13 @@ class ChargerManager:
                 delay = 2.0
 
                 # Authentication captures/ACKs the charger's initial Notify burst.
-                # Process it before fresh GETs so old frames never overwrite the
-                # authoritative startup snapshot that follows.
+                # Consume those frames in counter order, but do not emit them yet:
+                # PIID 17/18 hardware protocol state has not been loaded, so exposing
+                # these old frames produces brief but incorrect "guess" labels. The
+                # fresh settings + port GET snapshot below is authoritative.
                 for event in await controller.drain_initial_events():
-                    await self._emit_device_event(cfg.name, controller, event, last_seen)
+                    if self.raw and event.property is not None:
+                        _LOG.info("[%s] RX(init) %s", cfg.name, event.property.plaintext.hex())
 
                 await controller.refresh_settings()
                 await self._emit_pending_events(cfg.name, controller, last_seen)
@@ -203,6 +206,11 @@ class ChargerManager:
         last_seen: dict[int, float],
     ) -> None:
         for event in controller.drain_pending_events():
+            # A Notify can arrive while a GET/SET temporarily owns cmd_recv. It is
+            # preserved by MiotCommandClient and emitted here; raw mode must show it
+            # too, otherwise the trace has unexplained state changes between GETs.
+            if self.raw and event.property is not None:
+                _LOG.info("[%s] RX(deferred) %s", name, event.property.plaintext.hex())
             await self._emit_device_event(name, controller, event, last_seen)
 
     def _stale_candidate(
