@@ -83,6 +83,17 @@ class ChargerState:
     def apply_port(self, reading: PortReading) -> None:
         self.ports[reading.piid] = reading
         self.last_port_update[reading.piid] = monotonic()
+
+        # PIID 17/18 hardware protocol bytes are intentionally sticky across
+        # transient zero values, because the charger can publish the protocol
+        # property slightly before/after the electrical port frame. A *true*
+        # idle port frame is the authoritative session boundary, though: once
+        # status, voltage and current are all zero, carrying the previous
+        # session's hardware protocol into the next plug-in can mislabel the
+        # first few frames before PIID 17/18 catches up.
+        if not reading.active:
+            self.hw_protocols.pop(reading.piid, None)
+
         if reading.piid == 3:
             self.c3a_shared = reading.shared
         elif reading.piid == 4 and reading.shared:
