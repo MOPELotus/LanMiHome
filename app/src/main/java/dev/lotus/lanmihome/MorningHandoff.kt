@@ -41,6 +41,7 @@ internal class MorningHandoffController(
     private var wifiHits = 0
     private var lastScanElapsed = 0L
     private var lastPromptDeadlineMillis: Long? = null
+    private var testModeActive = false
 
     private val targetSsids: Set<String> = config.handoffSsids
         .split(',')
@@ -67,6 +68,7 @@ internal class MorningHandoffController(
         if (deadline != null) {
             if (nowElapsed >= deadline) {
                 deadlineElapsed = null
+                testModeActive = false
                 NightNodeRuntime.log("晨间交接倒计时结束，停止 Night Node / SoftAP")
                 NightNodeRuntime.update { it.copy(handoffState = "executing") }
                 cancelPromptNotification()
@@ -77,9 +79,18 @@ internal class MorningHandoffController(
         }
 
         if (NightNodeRuntime.consumeHandoffTestRequest()) {
+            wifiHits = 0
+            lastScanElapsed = 0L
+            testModeActive = true
+            NightNodeRuntime.log("晨间交接测试模式：忽略时段，等待连续 Wi-Fi 确认")
+        }
+
+        if (testModeActive) {
             if (!rootAvailable) {
-                NightNodeRuntime.log("晨间交接测试失败：root 不可用")
-            } else {
+                NightNodeRuntime.log("晨间交接测试等待 root")
+                return
+            }
+            if (deadlineElapsed == null && nowElapsed - lastScanElapsed >= 3000L) {
                 scanAndMaybeTrigger(nowElapsed, testMode = true)
             }
             return
@@ -130,6 +141,7 @@ internal class MorningHandoffController(
     }
 
     fun executeNow() {
+        testModeActive = false
         NightNodeRuntime.log("用户选择立即晨间交接")
         deadlineElapsed = SystemClock.elapsedRealtime()
         NightNodeRuntime.update {
@@ -138,6 +150,7 @@ internal class MorningHandoffController(
     }
 
     fun delayFiveMinutes() {
+        testModeActive = false
         val until = System.currentTimeMillis() + 5 * 60 * 1000L
         NightNodePrefs.setSnoozeUntil(context, until)
         deadlineElapsed = null
@@ -156,6 +169,7 @@ internal class MorningHandoffController(
     }
 
     fun cancelForToday() {
+        testModeActive = false
         val today = LocalDate.now().toString()
         NightNodePrefs.setCancelledDate(context, today)
         NightNodePrefs.setSnoozeUntil(context, 0L)
@@ -175,6 +189,7 @@ internal class MorningHandoffController(
     }
 
     fun shutdown() {
+        testModeActive = false
         cancelPromptNotification()
     }
 
@@ -199,6 +214,7 @@ internal class MorningHandoffController(
 
         if (wifiHits >= config.handoffConfirmScans) {
             wifiHits = config.handoffConfirmScans
+            testModeActive = false
             startOrShortenCountdown(
                 seconds = config.handoffWifiDelaySeconds,
                 reason = if (testMode) "测试：主路由 Wi-Fi 已确认" else "主路由 Wi-Fi 已确认",
@@ -290,9 +306,9 @@ internal class MorningHandoffController(
             .setContentText("$reason · 默认倒计时执行")
             .setOngoing(true)
             .setOnlyAlertOnce(false)
-            .addAction(Notification.Action.Builder(android.R.drawable.ic_media_play, "立即交接", pending(nowIntent, 9101)).build())
-            .addAction(Notification.Action.Builder(android.R.drawable.ic_menu_recent_history, "延后 5 分钟", pending(delayIntent, 9102)).build())
-            .addAction(Notification.Action.Builder(android.R.drawable.ic_menu_close_clear_cancel, "取消本次", pending(cancelIntent, 9103)).build())
+            .addAction(Notification.Action.Builder(android.R.drawable.ic_dialog_info, "立即交接", pending(nowIntent, 9101)).build())
+            .addAction(Notification.Action.Builder(android.R.drawable.ic_dialog_info, "延后 5 分钟", pending(delayIntent, 9102)).build())
+            .addAction(Notification.Action.Builder(android.R.drawable.ic_dialog_info, "取消本次", pending(cancelIntent, 9103)).build())
             .build()
         context.getSystemService(NotificationManager::class.java).notify(HANDOFF_NOTIFICATION_ID, notification)
 
