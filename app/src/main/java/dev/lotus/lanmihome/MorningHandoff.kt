@@ -313,7 +313,7 @@ internal class MorningHandoffController(
         context.getSystemService(NotificationManager::class.java).notify(HANDOFF_NOTIFICATION_ID, notification)
 
         NightNodeRuntime.update { it.copy(handoffDeadlineMillis = deadlineMillis) }
-        val component = "${context.packageName}/.HandoffActivity"
+        val component = "${context.packageName}/${HandoffActivity::class.java.name}"
         val result = RootShell.run("am start -W -n ${RootShell.quote(component)} --activity-clear-top", 8)
         if (result.code != 0) NightNodeRuntime.log("晨间交接确认界面未拉起：${result.output}")
     }
