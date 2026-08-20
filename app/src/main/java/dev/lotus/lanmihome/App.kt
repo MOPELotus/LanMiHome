@@ -78,7 +78,6 @@ fun LanMiHomeApp() {
     val context = androidx.compose.ui.platform.LocalContext.current
     val prefs = remember { context.getSharedPreferences(MAIN_PREFS, Context.MODE_PRIVATE) }
     var baseUrl by remember { mutableStateOf(prefs.getString("base_url", DEFAULT_SERVER_URL) ?: DEFAULT_SERVER_URL) }
-    var gatewayFallback by remember { mutableStateOf(prefs.getBoolean("auto_gateway_fallback", true)) }
     var activeBase by remember { mutableStateOf(baseUrl) }
     var activeKind by remember { mutableStateOf(BackendKind.PRIMARY) }
     var tab by remember { mutableStateOf(Tab.FAN) }
@@ -103,17 +102,20 @@ fun LanMiHomeApp() {
 
     fun rediscoveryTargets(): List<BackendTarget> {
         val targets = mutableListOf<BackendTarget>()
+        val gateway = gatewayServerTarget(context)
 
         if (activeKind == BackendKind.LOCAL) {
             targets += BackendTarget(activeBase, BackendKind.LOCAL)
+        } else if (!online && gateway != null && gateway.url != baseUrl) {
+            // The selected backend has gone offline after a Wi-Fi change. In the
+            // Night Node case this avoids wasting a timeout on the old router.
+            targets += gateway
         } else {
             resolvedActiveTarget()?.let { targets += it }
         }
 
         targets += BackendTarget(baseUrl, BackendKind.PRIMARY)
-        if (gatewayFallback) {
-            gatewayServerTarget(context)?.let { targets += it }
-        }
+        gateway?.let { targets += it }
 
         return targets.distinctBy { "${it.kind}:${it.url}" }
     }
@@ -295,16 +297,14 @@ fun LanMiHomeApp() {
     if (settings) {
         SettingsDialog(
             initial = baseUrl,
-            initialFallback = gatewayFallback,
             onDismiss = { settings = false },
-        ) { raw, fallback ->
+        ) { raw ->
             runCatching { LanMiHomeApi.normalize(raw) }.onSuccess { value ->
                 prefs.edit()
                     .putString("base_url", value)
-                    .putBoolean("auto_gateway_fallback", fallback)
+                    .remove("auto_gateway_fallback")
                     .apply()
                 baseUrl = value
-                gatewayFallback = fallback
                 activeBase = value
                 activeKind = BackendKind.PRIMARY
                 online = false
@@ -322,30 +322,27 @@ fun LanMiHomeApp() {
 @Composable
 private fun SettingsDialog(
     initial: String,
-    initialFallback: Boolean,
     onDismiss: () -> Unit,
-    onSave: (String, Boolean) -> Unit,
+    onSave: (String) -> Unit,
 ) {
     var value by remember(initial) { mutableStateOf(initial) }
-    var fallback by remember(initialFallback) { mutableStateOf(initialFallback) }
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("服务端设置") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 OutlinedTextField(value, { value = it }, label = { Text("主 LanMiHome 地址") }, singleLine = true)
-                ToggleLine(
-                    "刷新时探测当前 Wi-Fi 网关作为备用节点",
-                    fallback,
-                    note = "后台刷新只沿用当前已选服务端；只有点击“刷新”时才重新探测主服务端和 http://<当前 Wi-Fi 网关>:8765。备用节点请求会强制走 Wi-Fi，避免无互联网热点下被移动数据抢走。",
-                ) { fallback = it }
+                Text(
+                    "点击右上角“刷新”会重新探测主服务端和当前 Wi-Fi 网关 :8765。主服务端离线且网关已改变时优先尝试网关；后台刷新只沿用当前已选服务端。备用节点请求会强制走 Wi-Fi。",
+                    style = MaterialTheme.typography.bodySmall,
+                )
                 Text(
                     "例如 http://10.0.0.1:8765\n主路由器上的 Xiaomi/BLE/CUKTECH secrets 仍只保存在路由器；Night Node 使用自己的本地私有配置。",
                     style = MaterialTheme.typography.bodySmall,
                 )
             }
         },
-        confirmButton = { Button({ onSave(value, fallback) }) { Text("保存") } },
+        confirmButton = { Button({ onSave(value) }) { Text("保存") } },
         dismissButton = { TextButton(onDismiss) { Text("取消") } },
     )
 }
