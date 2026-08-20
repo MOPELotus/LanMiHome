@@ -84,7 +84,13 @@ def main() -> int:
                 reason = "inside-window"
 
             if reason != last_wait_reason:
-                LOG.info("state=%s window=%s-%s now=%s", reason, start_text, end_text, now.isoformat(timespec="seconds"))
+                LOG.info(
+                    "state=%s window=%s-%s now=%s",
+                    reason,
+                    start_text,
+                    end_text,
+                    now.astimezone().isoformat(timespec="seconds"),
+                )
                 last_wait_reason = reason
 
             if reason != "inside-window":
