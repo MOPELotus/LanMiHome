@@ -437,13 +437,24 @@ class SensorStore:
             return
         now = time.time()
         identity = (decoded.get("frame_counter"), decoded.get("raw"))
+        has_measurement = any(
+            decoded.get(key) is not None
+            for key in ("temperature", "humidity", "battery")
+        )
         with self.lock:
             if identity == self._last_identity:
                 self.data["rssi"] = getattr(adv, "rssi", self.data.get("rssi"))
-                self.data["received_epoch"] = now
-                self.data["received_at"] = _iso(now)
                 return
+
             self._last_identity = identity
+
+            # MiBeacon also emits identity/metadata advertisements carrying no
+            # sensor measurement. They prove the device is nearby, but must not
+            # make an old temperature/humidity reading look fresh.
+            if not has_measurement:
+                self.data["rssi"] = getattr(adv, "rssi", self.data.get("rssi"))
+                return
+
             for key in ("temperature", "humidity", "battery"):
                 if decoded.get(key) is not None:
                     self.data[key] = decoded[key]
@@ -486,6 +497,14 @@ class SensorStore:
     def snapshot(self) -> dict:
         with self.lock:
             data = copy.deepcopy(self.data)
+
+        # BLE payloads may contain IEEE-754 float32 values such as
+        # 32.20000076293945. Sensor resolution is only meaningful to 0.1.
+        for key in ("temperature", "humidity"):
+            value = data.get(key)
+            if isinstance(value, (int, float)) and not isinstance(value, bool):
+                data[key] = round(float(value), 1)
+
         received = data.pop("received_epoch", None)
         age = max(0, int(time.time() - received)) if received else None
         has_measurement = any(data.get(k) is not None for k in ("temperature", "humidity", "battery"))
