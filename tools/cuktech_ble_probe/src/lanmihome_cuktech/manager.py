@@ -4,11 +4,11 @@ import asyncio
 import logging
 import time
 from dataclasses import dataclass
-from typing import Awaitable, Callable
+from typing import Awaitable, Callable, TypeVar
 
 from .controller import CuktechController, DeviceEvent
 from .protocol import PortReading
-from .session import AuthenticationError
+from .session import AuthenticationError, DeviceResolver
 from .state import ChargerState
 
 _LOG = logging.getLogger("lanmihome.cuktech")
@@ -16,6 +16,8 @@ _LOG = logging.getLogger("lanmihome.cuktech")
 ReadingCallback = Callable[[str, PortReading], Awaitable[None] | None]
 StateCallback = Callable[[str, str], Awaitable[None] | None]
 SettingsCallback = Callable[[str, ChargerState], Awaitable[None] | None]
+_T = TypeVar("_T")
+ControllerOperation = Callable[[CuktechController], Awaitable[_T]]
 
 
 @dataclass(slots=True)
@@ -23,6 +25,12 @@ class ChargerConfig:
     name: str
     address: str
     token: bytes
+
+
+@dataclass(slots=True)
+class _QueuedOperation:
+    callback: ControllerOperation
+    future: asyncio.Future
 
 
 class ChargerManager:
@@ -33,6 +41,10 @@ class ChargerManager:
     WinRT reliability workaround; authenticated steady-state sessions run in
     parallel. Device telemetry is event-driven with active GET refresh for stable
     ports, full setting/protocol state, keepalive and per-device reconnect.
+
+    ``execute`` queues controller operations onto the owning worker. This keeps
+    the command response channel single-consumer even when a router HTTP thread
+    requests a setting change while live Notify monitoring is active.
     """
 
     ACTIVE_STALE_AFTER = 15.0
@@ -49,16 +61,21 @@ class ChargerManager:
         on_state: StateCallback | None = None,
         on_settings: SettingsCallback | None = None,
         raw: bool = False,
+        device_resolver: DeviceResolver | None = None,
     ):
         self.chargers = chargers
         self.on_reading = on_reading
         self.on_state = on_state
         self.on_settings = on_settings
         self.raw = raw
+        self.device_resolver = device_resolver
         self._stop = asyncio.Event()
         self._setup_lock = asyncio.Lock()
         self.controllers: dict[str, CuktechController] = {}
         self.sessions = {}
+        self._operations: dict[str, asyncio.Queue[_QueuedOperation]] = {
+            cfg.name: asyncio.Queue() for cfg in chargers
+        }
 
     async def run(self) -> None:
         if not self.chargers:
@@ -73,11 +90,51 @@ class ChargerManager:
             *(controller.disconnect() for controller in self.controllers.values()),
             return_exceptions=True,
         )
+        for queue in self._operations.values():
+            while True:
+                try:
+                    item = queue.get_nowait()
+                except asyncio.QueueEmpty:
+                    break
+                if not item.future.done():
+                    item.future.set_exception(ConnectionError("charger manager stopped"))
+
+    async def execute(
+        self,
+        name: str,
+        callback: Callable[[CuktechController], Awaitable[_T]],
+        *,
+        timeout: float = 20.0,
+    ) -> _T:
+        """Run one controller operation inside that charger's worker.
+
+        The worker is the only consumer of the MiOT command/Notify receive queue,
+        so HTTP controls cannot steal or lose command replies while monitoring.
+        """
+        if self._stop.is_set():
+            raise ConnectionError("charger manager is stopping")
+        try:
+            queue = self._operations[name]
+        except KeyError as exc:
+            raise KeyError(f"unknown charger: {name}") from exc
+        loop = asyncio.get_running_loop()
+        future: asyncio.Future[_T] = loop.create_future()
+        await queue.put(_QueuedOperation(callback=callback, future=future))
+        try:
+            return await asyncio.wait_for(asyncio.shield(future), timeout)
+        except asyncio.TimeoutError:
+            future.cancel()
+            raise TimeoutError(f"{name}: charger operation timed out after {timeout:.1f}s") from None
 
     async def _worker(self, cfg: ChargerConfig) -> None:
         delay = 2.0
         while not self._stop.is_set():
-            controller = CuktechController(cfg.name, cfg.address, cfg.token)
+            controller = CuktechController(
+                cfg.name,
+                cfg.address,
+                cfg.token,
+                device_resolver=self.device_resolver,
+            )
             self.controllers[cfg.name] = controller
             self.sessions[cfg.name] = controller.session
             started = time.monotonic()
@@ -126,6 +183,13 @@ class ChargerManager:
                         await self._emit_reading(cfg.name, reading)
 
                 while not self._stop.is_set() and controller.connected:
+                    # Execute at most one external control between receive windows.
+                    # Controller methods themselves serialize encrypted GET/SET.
+                    if await self._run_one_operation(cfg.name, controller, last_seen):
+                        last_settings_refresh = time.monotonic()
+                        last_keepalive = time.monotonic()
+                        continue
+
                     plaintext = await controller.session.next_plaintext(timeout=self.LOOP_TIMEOUT)
                     now = time.monotonic()
                     if plaintext is not None:
@@ -185,6 +249,34 @@ class ChargerManager:
                 break
             await asyncio.sleep(delay)
             delay = min(delay * 2.0, 30.0)
+
+    async def _run_one_operation(
+        self,
+        name: str,
+        controller: CuktechController,
+        last_seen: dict[int, float],
+    ) -> bool:
+        queue = self._operations[name]
+        try:
+            item = queue.get_nowait()
+        except asyncio.QueueEmpty:
+            return False
+        if item.future.cancelled():
+            return True
+        if not controller.connected or not controller.authenticated:
+            if not item.future.done():
+                item.future.set_exception(ConnectionError(f"{name}: charger is not authenticated"))
+            return True
+        try:
+            result = await item.callback(controller)
+            await self._emit_pending_events(name, controller, last_seen)
+            await self._emit_settings(name, controller.state)
+            if not item.future.done():
+                item.future.set_result(result)
+        except Exception as exc:
+            if not item.future.done():
+                item.future.set_exception(exc)
+        return True
 
     async def _emit_device_event(
         self,

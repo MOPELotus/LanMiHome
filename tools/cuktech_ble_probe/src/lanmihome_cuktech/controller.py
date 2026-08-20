@@ -17,7 +17,7 @@ from .protocol import (
     parse_property_push,
     set_protocol_switch,
 )
-from .session import CuktechSession, DeviceInfo
+from .session import CuktechSession, DeviceInfo, DeviceResolver
 from .state import ChargerState
 
 
@@ -31,10 +31,22 @@ class DeviceEvent:
 class CuktechController:
     """Complete per-device AD1204 controller built on one isolated BLE session."""
 
-    def __init__(self, name: str, address: str, token: bytes):
+    def __init__(
+        self,
+        name: str,
+        address: str,
+        token: bytes,
+        *,
+        device_resolver: DeviceResolver | None = None,
+    ):
         self.name = name
         self.address = address
-        self.session = CuktechSession(name, address, token)
+        self.session = CuktechSession(
+            name,
+            address,
+            token,
+            device_resolver=device_resolver,
+        )
         self.miot = MiotCommandClient(self.session)
         self.state = ChargerState()
         self._pending_events: deque[DeviceEvent] = deque()

@@ -1,0 +1,43 @@
+{
+  "listen": "0.0.0.0",
+  "port": 8765,
+  "devices": {
+    "fan": {
+      "enabled": true,
+      "name": "宿舍风扇",
+      "ip": "10.0.0.222",
+      "token": "PUT_XIAOMI_TOKEN_HERE",
+      "model": "dmaker.fan.p5c",
+      "timeout": 3
+    },
+    "lamp": {
+      "enabled": true,
+      "name": "宿舍台灯",
+      "ip": "10.0.0.223",
+      "token": "PUT_XIAOMI_TOKEN_HERE",
+      "model": "xiaomi.light.lamp31",
+      "timeout": 3
+    }
+  },
+  "sensor": {
+    "enabled": true,
+    "address": "AA:BB:CC:DD:EE:FF",
+    "bind_key": "PUT_16_BYTE_HEX_BINDKEY_HERE",
+    "stale_seconds": 180
+  },
+  "chargers": [
+    {
+      "enabled": true,
+      "name": "desk",
+      "address": "AA:BB:CC:DD:EE:01",
+      "token": "PUT_12_BYTE_HEX_TOKEN_HERE"
+    }
+  ],
+  "recovery": {
+    "enabled": true,
+    "start": "05:00",
+    "end": "06:30",
+    "retry_seconds": 5,
+    "force_timeout_seconds": 120
+  }
+}

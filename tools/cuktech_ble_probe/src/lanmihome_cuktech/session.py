@@ -8,6 +8,7 @@ import struct
 import time
 from collections import deque
 from dataclasses import dataclass
+from typing import Awaitable, Callable
 
 from bleak import BleakClient
 from cryptography.hazmat.backends import default_backend
@@ -28,6 +29,8 @@ from .protocol import (
 
 _LOG = logging.getLogger("lanmihome.cuktech")
 
+DeviceResolver = Callable[[str], Awaitable[object | None]]
+
 
 @dataclass(slots=True)
 class DeviceInfo:
@@ -43,12 +46,20 @@ class AuthenticationError(RuntimeError):
 class CuktechSession:
     """One isolated MiOT BLE session for one CUKTECH AD1204 charger."""
 
-    def __init__(self, name: str, address: str, token: bytes):
+    def __init__(
+        self,
+        name: str,
+        address: str,
+        token: bytes,
+        *,
+        device_resolver: DeviceResolver | None = None,
+    ):
         if len(token) != 12:
             raise ValueError(f"{name}: token must be exactly 12 bytes")
         self.name = name
         self.address = address
         self.token = token
+        self.device_resolver = device_resolver
         self.mac_bytes = mac_to_miot_bytes(address)
 
         self.client: BleakClient | None = None
@@ -96,7 +107,13 @@ class CuktechSession:
 
     async def connect(self) -> None:
         _LOG.info("[%s] connecting to %s", self.name, self.address)
-        self.client = BleakClient(self.address)
+        target: object | str = self.address
+        if self.device_resolver is not None:
+            resolved = await self.device_resolver(self.address)
+            if resolved is None:
+                raise ConnectionError(f"{self.name}: BLE device was not seen by the shared scanner")
+            target = resolved
+        self.client = BleakClient(target)
         await self.client.connect()
 
         for char, channel in (
