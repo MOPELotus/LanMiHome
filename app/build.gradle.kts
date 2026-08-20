@@ -11,12 +11,27 @@ android {
         applicationId = "dev.lotus.lanmihome.client"
         minSdk = 26
         targetSdk = 36
-        versionCode = 8
-        versionName = "1.5.0"
+        versionCode = 9
+        versionName = "1.5.1"
+    }
+
+    flavorDimensions += "role"
+    productFlavors {
+        create("client") {
+            dimension = "role"
+            buildConfigField("boolean", "NIGHT_NODE_ENABLED", "false")
+            manifestPlaceholders["nightNodeEnabled"] = "false"
+        }
+        create("night") {
+            dimension = "role"
+            buildConfigField("boolean", "NIGHT_NODE_ENABLED", "true")
+            manifestPlaceholders["nightNodeEnabled"] = "true"
+        }
     }
 
     buildFeatures {
         compose = true
+        buildConfig = true
     }
 
     compileOptions {

@@ -19,6 +19,7 @@
         </activity>
         <service
             android:name=".NightNodeService"
+            android:enabled="${nightNodeEnabled}"
             android:exported="false"
             android:foregroundServiceType="specialUse">
             <property
