@@ -38,6 +38,8 @@
     "start": "05:00",
     "end": "06:30",
     "retry_seconds": 5,
-    "force_timeout_seconds": 120
+    "force_timeout_seconds": 120,
+    "supervisor_seconds": 10,
+    "clock_min_year": 2024
   }
 }

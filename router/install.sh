@@ -54,6 +54,7 @@ SRC="$TMP/LanMiHome-$BRANCH"
 
 for required in \
     "$SRC/router/lanmihome.py" \
+    "$SRC/router/recovery_supervisor.py" \
     "$SRC/router/lanmihome.init" \
     "$SRC/router/config.example.json" \
     "$SRC/tools/cuktech_ble_probe/src/lanmihome_cuktech/__init__.py"; do
@@ -77,15 +78,16 @@ for svc in /etc/init.d/*; do
 done
 
 # Back up the old backend and local configuration without printing any secret.
-for file in lanmihome.py config.json config.example.json; do
+for file in lanmihome.py recovery_supervisor.py config.json config.example.json; do
     [ -f "$BASE/$file" ] && cp -p "$BASE/$file" "$BACKUP/$file"
 done
 
 cp "$SRC/router/lanmihome.py" "$BASE/lanmihome.py"
+cp "$SRC/router/recovery_supervisor.py" "$BASE/recovery_supervisor.py"
 cp "$SRC/router/config.example.json" "$BASE/config.example.json"
 rm -rf "$BASE/lanmihome_cuktech"
 cp -a "$SRC/tools/cuktech_ble_probe/src/lanmihome_cuktech" "$BASE/lanmihome_cuktech"
-chmod 0755 "$BASE/lanmihome.py"
+chmod 0755 "$BASE/lanmihome.py" "$BASE/recovery_supervisor.py"
 
 if [ ! -f "$BASE/config.json" ]; then
     cp "$BASE/config.example.json" "$BASE/config.json"
@@ -100,6 +102,7 @@ chmod 0755 /etc/init.d/lanmihome
 # Xiaomi tokens, BLE bind keys or CUKTECH tokens.
 PYTHONPATH="$PYTHONPATH_VALUE" /usr/bin/python3 "$BASE/lanmihome.py" \
     --config "$BASE/config.json" --check-config
+/usr/bin/python3 -m py_compile "$BASE/recovery_supervisor.py"
 
 /etc/init.d/lanmihome enable
 /etc/init.d/lanmihome restart
@@ -107,9 +110,10 @@ sleep 2
 
 echo
 echo "LanMiHome router backend installed."
-echo "  service: /etc/init.d/lanmihome"
-echo "  backend: $BASE/lanmihome.py"
-echo "  config : $BASE/config.json (preserved, mode 0600)"
-echo "  backup : $BACKUP"
-echo "  logs   : logread -e lanmihome -e cuktech"
-echo "  health : wget -qO- http://127.0.0.1:8765/api/v1/health"
+echo "  service   : /etc/init.d/lanmihome"
+echo "  backend   : $BASE/lanmihome.py"
+echo "  recovery  : $BASE/recovery_supervisor.py"
+echo "  config    : $BASE/config.json (preserved, mode 0600)"
+echo "  backup    : $BACKUP"
+echo "  logs      : logread -e lanmihome -e recovery-supervisor -e cuktech"
+echo "  health    : wget -qO- http://127.0.0.1:8765/api/v1/health"
