@@ -71,7 +71,7 @@ private fun ChargerDevice(
         charger.address,
         charger.firmwareVersion?.let { "FW $it" },
         charger.miotVersion?.let { "MIoT $it" },
-    ).joinToString(" · ").ifBlank { null }
+    ).joinToString(" · ").takeIf { it.isNotBlank() }
 
     DeviceHeader(
         title = label,
