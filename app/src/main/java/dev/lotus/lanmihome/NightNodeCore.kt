@@ -1,48 +1,22 @@
 package dev.lotus.lanmihome
 
-import android.app.Notification
-import android.app.NotificationChannel
-import android.app.NotificationManager
-import android.app.PendingIntent
-import android.app.Service
 import android.content.Context
-import android.content.Intent
-import android.os.Handler
-import android.os.IBinder
-import android.os.Looper
-import android.os.PowerManager
 import android.os.SystemClock
-import org.json.JSONArray
-import org.json.JSONObject
-import java.io.BufferedReader
-import java.io.InputStreamReader
-import java.net.DatagramPacket
-import java.net.DatagramSocket
 import java.net.Inet4Address
 import java.net.InetAddress
-import java.net.InetSocketAddress
 import java.net.NetworkInterface
-import java.net.ServerSocket
-import java.net.Socket
-import java.nio.ByteBuffer
-import java.nio.ByteOrder
-import java.security.MessageDigest
 import java.text.SimpleDateFormat
 import java.util.Collections
 import java.util.Date
 import java.util.Locale
-import java.util.TimeZone
-import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
-import java.util.concurrent.atomic.AtomicInteger
-import javax.crypto.Cipher
-import javax.crypto.spec.IvParameterSpec
-import javax.crypto.spec.SecretKeySpec
 
 private const val NIGHT_PREFS = "lanmihome_night"
 internal const val NIGHT_CHANNEL = "lanmihome-night-node"
 internal const val NIGHT_NOTIFICATION_ID = 8765
+internal const val HANDOFF_CHANNEL = "lanmihome-night-handoff"
+internal const val HANDOFF_NOTIFICATION_ID = 8766
 
 internal data class NightNodeConfig(
     val manageHotspot: Boolean = false,
@@ -52,6 +26,14 @@ internal data class NightNodeConfig(
     val port: Int = 8765,
     val fanToken: String = "",
     val lampToken: String = "",
+    val handoffEnabled: Boolean = true,
+    val handoffWindowStart: String = "05:00",
+    val handoffWindowEnd: String = "06:00",
+    val handoffScanInterface: String = "wlan0",
+    val handoffSsids: String = "LotusNet_2.4G,LotusNet_5G",
+    val handoffChargeDelaySeconds: Int = 120,
+    val handoffWifiDelaySeconds: Int = 15,
+    val handoffConfirmScans: Int = 2,
 )
 
 internal object NightNodePrefs {
@@ -65,6 +47,14 @@ internal object NightNodePrefs {
             port = p.getInt("port", 8765).coerceIn(1024, 65535),
             fanToken = p.getString("fan_token", "") ?: "",
             lampToken = p.getString("lamp_token", "") ?: "",
+            handoffEnabled = p.getBoolean("handoff_enabled", true),
+            handoffWindowStart = p.getString("handoff_window_start", "05:00") ?: "05:00",
+            handoffWindowEnd = p.getString("handoff_window_end", "06:00") ?: "06:00",
+            handoffScanInterface = p.getString("handoff_scan_interface", "wlan0") ?: "wlan0",
+            handoffSsids = p.getString("handoff_ssids", "LotusNet_2.4G,LotusNet_5G") ?: "LotusNet_2.4G,LotusNet_5G",
+            handoffChargeDelaySeconds = p.getInt("handoff_charge_delay_seconds", 120).coerceIn(15, 1800),
+            handoffWifiDelaySeconds = p.getInt("handoff_wifi_delay_seconds", 15).coerceIn(5, 300),
+            handoffConfirmScans = p.getInt("handoff_confirm_scans", 2).coerceIn(1, 5),
         )
     }
 
@@ -77,7 +67,29 @@ internal object NightNodePrefs {
             .putInt("port", config.port)
             .putString("fan_token", normalizeMiioToken(config.fanToken) ?: "")
             .putString("lamp_token", normalizeMiioToken(config.lampToken) ?: "")
+            .putBoolean("handoff_enabled", config.handoffEnabled)
+            .putString("handoff_window_start", config.handoffWindowStart)
+            .putString("handoff_window_end", config.handoffWindowEnd)
+            .putString("handoff_scan_interface", config.handoffScanInterface)
+            .putString("handoff_ssids", config.handoffSsids)
+            .putInt("handoff_charge_delay_seconds", config.handoffChargeDelaySeconds)
+            .putInt("handoff_wifi_delay_seconds", config.handoffWifiDelaySeconds)
+            .putInt("handoff_confirm_scans", config.handoffConfirmScans)
             .apply()
+    }
+
+    fun cancelledDate(context: Context): String =
+        context.getSharedPreferences(NIGHT_PREFS, Context.MODE_PRIVATE).getString("handoff_cancelled_date", "") ?: ""
+
+    fun setCancelledDate(context: Context, value: String) {
+        context.getSharedPreferences(NIGHT_PREFS, Context.MODE_PRIVATE).edit().putString("handoff_cancelled_date", value).apply()
+    }
+
+    fun snoozeUntil(context: Context): Long =
+        context.getSharedPreferences(NIGHT_PREFS, Context.MODE_PRIVATE).getLong("handoff_snooze_until", 0L)
+
+    fun setSnoozeUntil(context: Context, value: Long) {
+        context.getSharedPreferences(NIGHT_PREFS, Context.MODE_PRIVATE).edit().putLong("handoff_snooze_until", value).apply()
     }
 }
 
@@ -96,6 +108,11 @@ internal data class NightNodeStatus(
     val fanIp: String? = null,
     val lampIp: String? = null,
     val lastError: String? = null,
+    val handoffState: String = "idle",
+    val handoffReason: String? = null,
+    val handoffDeadlineMillis: Long? = null,
+    val handoffWifiHits: Int = 0,
+    val handoffSeenSsids: List<String> = emptyList(),
     val logs: List<String> = emptyList(),
 )
 
@@ -104,6 +121,7 @@ internal object NightNodeRuntime {
     private val logLines = java.util.ArrayDeque<String>()
     private var state = NightNodeStatus()
     private val discoverRequested = AtomicBoolean(false)
+    private val handoffTestRequested = AtomicBoolean(false)
 
     fun snapshot(): NightNodeStatus = synchronized(lock) {
         state.copy(logs = logLines.toList())
@@ -125,6 +143,13 @@ internal object NightNodeRuntime {
     }
 
     fun consumeDiscoveryRequest(): Boolean = discoverRequested.getAndSet(false)
+
+    fun requestHandoffTest() {
+        handoffTestRequested.set(true)
+        log("已请求晨间交接测试")
+    }
+
+    fun consumeHandoffTestRequest(): Boolean = handoffTestRequested.getAndSet(false)
 }
 
 internal data class ShellResult(val code: Int, val output: String)
@@ -191,8 +216,6 @@ internal object NightNetwork {
             return null
         }
         val args = "${RootShell.quote(config.ssid)} wpa2 ${RootShell.quote(config.passphrase)} -b 2"
-        // Prefer the tethered SoftAP path: on Android it is the closest match to
-        // the user-visible hotspot and can keep cellular upstream/NAT alive.
         val softap = RootShell.run("cmd wifi start-softap $args", 15)
         SystemClock.sleep(1500)
         detect(config.interfaceName)?.let {
@@ -200,8 +223,6 @@ internal object NightNetwork {
             return it
         }
 
-        // Some OEM builds expose only the local-only command to shell/root. It
-        // is still sufficient for LanMiHome because all control is local LAN.
         val lohs = RootShell.run("cmd wifi start-lohs $args", 15)
         SystemClock.sleep(1200)
         val info = detect(config.interfaceName)
@@ -229,5 +250,13 @@ internal object NightNetwork {
         return regex.findAll(result.output).mapNotNull { match ->
             runCatching { InetAddress.getByName(match.groupValues[1]) as? Inet4Address }.getOrNull()
         }.toSet()
+    }
+
+    fun scanSsids(interfaceName: String): Set<String> {
+        if (interfaceName.isBlank()) return emptySet()
+        val command = "iw dev ${RootShell.quote(interfaceName)} scan 2>/dev/null | sed -n 's/^[[:space:]]*SSID: //p'"
+        val result = RootShell.run(command, 12)
+        if (result.code != 0) return emptySet()
+        return result.output.lineSequence().map(String::trim).filter(String::isNotBlank).toSet()
     }
 }
