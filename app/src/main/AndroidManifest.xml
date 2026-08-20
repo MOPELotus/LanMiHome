@@ -22,7 +22,7 @@
             android:name=".HandoffActivity"
             android:enabled="${nightNodeEnabled}"
             android:excludeFromRecents="true"
-            android:exported="false" />
+            android:exported="true" />
         <service
             android:name=".NightNodeService"
             android:enabled="${nightNodeEnabled}"
