@@ -9,7 +9,10 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
-private enum class Tab { FAN, LAMP, SENSOR }
+internal const val MAIN_PREFS = "lanmihome"
+internal const val DEFAULT_SERVER_URL = "http://10.0.0.1:8765"
+
+private enum class Tab { FAN, LAMP, SENSOR, CHARGER }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -21,6 +24,7 @@ fun LanMiHomeApp() {
     var fan by remember{mutableStateOf<FanState?>(null)}
     var lamp by remember{mutableStateOf<LampState?>(null)}
     var sensor by remember{mutableStateOf<SensorState?>(null)}
+    var chargers by remember{mutableStateOf<List<ChargerState>?>(null)}
     var recovery by remember{mutableStateOf<RecoveryState?>(null)}
     var online by remember{mutableStateOf(false)}
     var busy by remember{mutableStateOf(false)}
@@ -35,6 +39,7 @@ fun LanMiHomeApp() {
                 Tab.FAN->fan=api.fan()
                 Tab.LAMP->lamp=api.lamp()
                 Tab.SENSOR->sensor=api.sensor()
+                Tab.CHARGER->chargers=api.chargers()
             }
             recovery=runCatching{api.recovery()}.getOrNull()
             online=true
@@ -44,46 +49,100 @@ fun LanMiHomeApp() {
                 Tab.FAN -> fan=FanState(false,e.message)
                 Tab.LAMP -> lamp=LampState(false,e.message)
                 Tab.SENSOR -> sensor=null
+                Tab.CHARGER -> chargers=emptyList()
             }
             if(!silent) snack.showSnackbar("连接失败：${e.message}")
         }
     }
-    fun command(block:suspend()->Unit) { scope.launch { busy=true; try { block(); refresh() } catch(e:Exception){snack.showSnackbar("操作失败：${e.message}")} finally{busy=false} } }
 
-    LaunchedEffect(baseUrl,tab) { while(isActive){ if(!busy) refresh(); delay(5000) } }
+    fun command(block:suspend()->Unit) {
+        scope.launch {
+            busy=true
+            try {
+                block()
+                refresh()
+            } catch(e:Exception) {
+                snack.showSnackbar("操作失败：${e.message}")
+            } finally {
+                busy=false
+            }
+        }
+    }
+
+    LaunchedEffect(baseUrl,tab) {
+        while(isActive) {
+            if(!busy) refresh()
+            delay(if(tab==Tab.CHARGER) 3000 else 5000)
+        }
+    }
 
     Scaffold(
         snackbarHost={SnackbarHost(snack)},
-        topBar={TopAppBar(title={Column{Text("LAN 米家");Text(if(online)"服务端已连接" else "服务端未连接",style=MaterialTheme.typography.labelSmall)}},actions={
-            TextButton(onClick={scope.launch{refresh(false)}}){Text("刷新")}
-            TextButton(onClick={settings=true}){Text("设置")}
-        })},
+        topBar={TopAppBar(
+            title={Column{
+                Text("LAN 米家")
+                Text(if(online)"服务端已连接" else "服务端未连接",style=MaterialTheme.typography.labelSmall)
+            }},
+            actions={
+                TextButton(onClick={scope.launch{refresh(false)}}){Text("刷新")}
+                TextButton(onClick={settings=true}){Text("设置")}
+            }
+        )},
         bottomBar={NavigationBar{
             NavigationBarItem(tab==Tab.FAN,{tab=Tab.FAN},icon={Text("◉")},label={Text("风扇")})
             NavigationBarItem(tab==Tab.LAMP,{tab=Tab.LAMP},icon={Text("●")},label={Text("台灯")})
             NavigationBarItem(tab==Tab.SENSOR,{tab=Tab.SENSOR},icon={Text("⌁")},label={Text("温湿度")})
+            NavigationBarItem(tab==Tab.CHARGER,{tab=Tab.CHARGER},icon={Text("⚡")},label={Text("充电头")})
         }}
     ){padding -> Box(Modifier.fillMaxSize().padding(padding)) {
         when(tab) {
             Tab.FAN -> FanScreen(fan,recovery,!busy,
-                patch={pairs->command{api.patchFan(*pairs)}}, action={n->command{api.fanAction(n)}}, recover={command{api.forceRecovery()}})
-            Tab.LAMP -> LampScreen(lamp,!busy,patch={pairs->command{api.patchLamp(*pairs)}},action={n,v->command{api.lampAction(n,v)}})
-            Tab.SENSOR -> if (BuildConfig.CLIENT_ONLY) ClientSensorScreen(sensor) else SensorScreen(sensor)
+                patch={pairs->command{api.patchFan(*pairs)}},
+                action={n->command{api.fanAction(n)}},
+                recover={command{api.forceRecovery()}})
+            Tab.LAMP -> LampScreen(lamp,!busy,
+                patch={pairs->command{api.patchLamp(*pairs)}},
+                action={n,v->command{api.lampAction(n,v)}})
+            Tab.SENSOR -> ClientSensorScreen(sensor)
+            Tab.CHARGER -> ChargerScreen(
+                chargers=chargers,
+                enabled=!busy,
+                patch={name,pairs->command{api.patchCharger(name,*pairs)}},
+                setPort={name,port,on->command{api.setChargerPort(name,port,on)}},
+                setProtocol={name,port,protocol,on->command{api.setChargerProtocol(name,port,protocol,on)}},
+                setTimer={name,port,minutes->command{api.setChargerTimer(name,port,minutes)}},
+            )
         }
         if(busy) LinearProgressIndicator(Modifier.fillMaxWidth())
     }}
 
     if(settings) SettingsDialog(baseUrl,{settings=false}){raw->
-        runCatching{LanMiHomeApi.normalize(raw)}.onSuccess{v->prefs.edit().putString("base_url",v).apply();baseUrl=v;fan=null;lamp=null;sensor=null;settings=false}
-            .onFailure{scope.launch{snack.showSnackbar(it.message?:"地址无效")}}
+        runCatching{LanMiHomeApi.normalize(raw)}.onSuccess{v->
+            prefs.edit().putString("base_url",v).apply()
+            baseUrl=v
+            fan=null
+            lamp=null
+            sensor=null
+            chargers=null
+            settings=false
+        }.onFailure{scope.launch{snack.showSnackbar(it.message?:"地址无效")}}
     }
 }
 
 @Composable
 private fun SettingsDialog(initial:String,onDismiss:()->Unit,onSave:(String)->Unit) {
     var value by remember(initial){mutableStateOf(initial)}
-    AlertDialog(onDismissRequest=onDismiss,title={Text("服务端设置")},text={Column{
-        OutlinedTextField(value,{value=it},label={Text("LanMiHome 地址")},singleLine=true)
-        Text("例如 http://10.0.0.1:8765\n小米 Wi-Fi token 只保存在路由器；BLE Key 只保存在网关手机。",style=MaterialTheme.typography.bodySmall)
-    }},confirmButton={Button({onSave(value)}){Text("保存")}},dismissButton={TextButton(onDismiss){Text("取消")}})
+    AlertDialog(
+        onDismissRequest=onDismiss,
+        title={Text("服务端设置")},
+        text={Column{
+            OutlinedTextField(value,{value=it},label={Text("LanMiHome 地址")},singleLine=true)
+            Text(
+                "例如 http://10.0.0.1:8765\n小米 Wi-Fi token、温湿度计 BLE Key 和充电头 token 均只保存在路由器。",
+                style=MaterialTheme.typography.bodySmall
+            )
+        }},
+        confirmButton={Button({onSave(value)}){Text("保存")}},
+        dismissButton={TextButton(onDismiss){Text("取消")}}
+    )
 }

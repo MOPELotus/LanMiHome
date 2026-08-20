@@ -8,31 +8,15 @@ android {
     compileSdk = 36
 
     defaultConfig {
-        applicationId = "dev.lotus.lanmihome"
+        applicationId = "dev.lotus.lanmihome.client"
         minSdk = 26
         targetSdk = 36
-        versionCode = 6
-        versionName = "1.3.0"
-    }
-
-    flavorDimensions += "role"
-    productFlavors {
-        create("gateway") {
-            dimension = "role"
-            buildConfigField("boolean", "CLIENT_ONLY", "false")
-            versionNameSuffix = "-gateway"
-        }
-        create("client") {
-            dimension = "role"
-            applicationIdSuffix = ".client"
-            buildConfigField("boolean", "CLIENT_ONLY", "true")
-            versionNameSuffix = "-client"
-        }
+        versionCode = 7
+        versionName = "1.4.0"
     }
 
     buildFeatures {
         compose = true
-        buildConfig = true
     }
 
     compileOptions {
@@ -52,6 +36,5 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2")
     implementation(platform("com.squareup.okhttp3:okhttp-bom:5.3.0"))
     implementation("com.squareup.okhttp3:okhttp")
-    implementation("org.bouncycastle:bcprov-jdk18on:1.84")
     debugImplementation("androidx.compose.ui:ui-tooling")
 }

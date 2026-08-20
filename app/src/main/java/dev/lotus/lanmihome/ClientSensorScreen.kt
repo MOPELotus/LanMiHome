@@ -50,18 +50,18 @@ fun ClientSensorScreen(server: SensorState?) {
 
         Card(Modifier.fillMaxWidth()) {
             Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(7.dp)) {
-                Text("数据状态", style = MaterialTheme.typography.titleMedium)
-                Text(if (server?.available == true) "RAX3000M：已有网关上报数据" else "RAX3000M：暂无新数据")
-                server?.ageSeconds?.let { Text("最后收到：${it} 秒前") }
-                server?.rssi?.let { Text("网关接收 RSSI：$it dBm") }
+                Text("路由器 BLE 状态", style = MaterialTheme.typography.titleMedium)
+                Text(if (server?.available == true) "RAX3000M：测量数据新鲜" else "RAX3000M：暂无新测量")
+                server?.ageSeconds?.let { Text("最后有效测量：${it} 秒前") }
+                server?.rssi?.let { Text("BlueZ 接收 RSSI：$it dBm") }
                 server?.mac?.let { Text("温湿度计：$it") }
                 server?.receivedAt?.let { Text("服务端时间：$it") }
-                if ((server?.reports ?: 0) > 0) Text("累计上报：${server?.reports}")
+                if ((server?.reports ?: 0) > 0) Text("有效测量帧：${server?.reports}")
             }
         }
 
         Text(
-            "本客户端只从 RAX3000M 读取温湿度计数据，不扫描蓝牙、不保存 BLE Key，也不进行本机解密。",
+            "温湿度计由 RAX3000M 的 BlueZ 持续扫描并在路由器本地解密；本客户端只读取 LAN API，不申请蓝牙权限、不保存 BLE Key。",
             style = MaterialTheme.typography.bodySmall,
         )
     }

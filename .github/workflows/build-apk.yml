@@ -30,19 +30,12 @@ jobs:
           SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
           yes | "$SDKMANAGER" --licenses >/dev/null || true
           "$SDKMANAGER" "platforms;android-36" "build-tools;36.0.0"
-      - name: Build gateway and client APKs
-        run: gradle --no-daemon :app:assembleGatewayDebug :app:assembleClientDebug --stacktrace
-      - name: Upload gateway APK
-        uses: actions/upload-artifact@v4
-        with:
-          name: LanMiHome-gateway-debug-apk
-          path: app/build/outputs/apk/gateway/debug/app-gateway-debug.apk
-          if-no-files-found: error
-          retention-days: 30
+      - name: Build LAN client APK
+        run: gradle --no-daemon :app:assembleDebug --stacktrace
       - name: Upload client APK
         uses: actions/upload-artifact@v4
         with:
           name: LanMiHome-client-debug-apk
-          path: app/build/outputs/apk/client/debug/app-client-debug.apk
+          path: app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
           retention-days: 30

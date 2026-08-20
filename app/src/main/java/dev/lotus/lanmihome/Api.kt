@@ -75,22 +75,110 @@ data class SensorState(
     ) }
 }
 
-data class SensorReport(
-    val temperature: Double? = null,
-    val humidity: Double? = null,
-    val battery: Int? = null,
-    val rssi: Int,
-    val mac: String,
-    val frameCounter: Int,
-    val raw: String,
-    val seenAtMs: Long,
-)
-
 data class RecoveryState(val active:Boolean, val success:Boolean, val attempts:Int, val reason:String?, val error:String?) {
     companion object { fun from(j: JSONObject)=RecoveryState(
         j.optBoolean("active"), j.optBoolean("success"), j.optInt("attempts"),
         j.stringOrNull("reason"), j.stringOrNull("last_error")
     ) }
+}
+
+data class ChargerPortState(
+    val key: String,
+    val name: String,
+    val voltage: Double,
+    val current: Double,
+    val power: Double,
+    val active: Boolean,
+    val protocol: String,
+    val protocolNumber: Int?,
+    val protocolSource: String?,
+    val shared: Boolean,
+    val enabled: Boolean,
+) {
+    companion object {
+        fun from(key: String, j: JSONObject) = ChargerPortState(
+            key = key,
+            name = j.optString("name", key.uppercase()),
+            voltage = j.optDouble("voltage", 0.0),
+            current = j.optDouble("current", 0.0),
+            power = j.optDouble("power", 0.0),
+            active = j.optBoolean("active", false),
+            protocol = j.optString("protocol_hint", if (j.optBoolean("active", false)) "unknown" else "idle"),
+            protocolNumber = j.intOrNull("protocol_number"),
+            protocolSource = j.stringOrNull("protocol_source"),
+            shared = j.optBoolean("shared", false),
+            enabled = j.optBoolean("enabled", true),
+        )
+    }
+}
+
+data class ChargerState(
+    val name: String,
+    val address: String? = null,
+    val connected: Boolean = false,
+    val authenticated: Boolean = false,
+    val deviceModel: String? = null,
+    val firmwareVersion: String? = null,
+    val miotVersion: String? = null,
+    val ports: Map<String, ChargerPortState> = emptyMap(),
+    val totalPower: Double = 0.0,
+    val c3aShared: Boolean = false,
+    val settings: Map<Int, Long> = emptyMap(),
+    val protocolSwitches: Map<String, Map<String, Boolean>> = emptyMap(),
+    val status: String? = null,
+    val updatedAt: String? = null,
+) {
+    val available get() = connected && authenticated
+
+    fun setting(piid: Int): Long? = settings[piid]
+
+    companion object {
+        private val portOrder = listOf("c1", "c2", "c3", "a")
+
+        fun from(j: JSONObject): ChargerState {
+            val portObject = j.optJSONObject("ports") ?: JSONObject()
+            val ports = linkedMapOf<String, ChargerPortState>()
+            portOrder.forEach { key ->
+                portObject.optJSONObject(key)?.let { ports[key] = ChargerPortState.from(key, it) }
+            }
+
+            val settingObject = j.optJSONObject("settings") ?: JSONObject()
+            val settings = mutableMapOf<Int, Long>()
+            settingObject.keys().forEach { key ->
+                key.toIntOrNull()?.let { piid ->
+                    if (!settingObject.isNull(key)) settings[piid] = settingObject.optLong(key)
+                }
+            }
+
+            val switchObject = j.optJSONObject("protocol_switches") ?: JSONObject()
+            val protocolSwitches = mutableMapOf<String, Map<String, Boolean>>()
+            switchObject.keys().forEach { port ->
+                val values = switchObject.optJSONObject(port) ?: return@forEach
+                val flags = mutableMapOf<String, Boolean>()
+                values.keys().forEach { protocol ->
+                    if (!values.isNull(protocol)) flags[protocol] = values.optBoolean(protocol)
+                }
+                protocolSwitches[port] = flags
+            }
+
+            return ChargerState(
+                name = j.optString("name", "charger"),
+                address = j.stringOrNull("address"),
+                connected = j.optBoolean("connected", false),
+                authenticated = j.optBoolean("authenticated", false),
+                deviceModel = j.stringOrNull("device_model"),
+                firmwareVersion = j.stringOrNull("firmware_version"),
+                miotVersion = j.stringOrNull("miot_version"),
+                ports = ports,
+                totalPower = j.optDouble("total_power", 0.0),
+                c3aShared = j.optBoolean("c3a_shared", false),
+                settings = settings,
+                protocolSwitches = protocolSwitches,
+                status = j.stringOrNull("status"),
+                updatedAt = j.stringOrNull("updated_at"),
+            )
+        }
+    }
 }
 
 class ApiException(message:String): IOException(message)
@@ -107,6 +195,13 @@ class LanMiHomeApi(rawBase: String) {
     suspend fun lamp() = LampState.from(request("GET", "/api/v1/lamp"))
     suspend fun sensor() = SensorState.from(request("GET", "/api/v1/sensor"))
     suspend fun recovery() = RecoveryState.from(request("GET", "/api/v1/system/recovery"))
+
+    suspend fun chargers(): List<ChargerState> {
+        val root = request("GET", "/api/v1/chargers")
+        val array = root.optJSONArray("chargers") ?: return emptyList()
+        return List(array.length()) { index -> ChargerState.from(array.getJSONObject(index)) }
+    }
+
     suspend fun patchFan(vararg pairs: Pair<String, Any>) = request("PATCH", "/api/v1/fan", obj(*pairs))
     suspend fun patchLamp(vararg pairs: Pair<String, Any>) = request("PATCH", "/api/v1/lamp", obj(*pairs))
     suspend fun fanAction(name:String) = request("POST", "/api/v1/fan/action", obj("name" to name))
@@ -115,20 +210,21 @@ class LanMiHomeApi(rawBase: String) {
     )
     suspend fun forceRecovery() = request("POST", "/api/v1/system/recovery/start", obj("force" to true))
 
-    suspend fun reportSensor(report: SensorReport): JSONObject {
-        val j = JSONObject()
-            .put("model", "xiaomi.sensor_ht.mini")
-            .put("product_id", SENSOR_PRODUCT_ID)
-            .put("rssi", report.rssi)
-            .put("mac", report.mac)
-            .put("frame_counter", report.frameCounter)
-            .put("raw", report.raw)
-            .put("seen_at_ms", report.seenAtMs)
-            .put("source", "android-ble-gateway")
-        report.temperature?.let { j.put("temperature", it) }
-        report.humidity?.let { j.put("humidity", it) }
-        report.battery?.let { j.put("battery", it) }
-        return request("POST", "/api/v1/sensor/report", j)
+    suspend fun patchCharger(name: String, vararg pairs: Pair<String, Any>) =
+        request("PATCH", "/api/v1/charger/$name", obj(*pairs))
+
+    suspend fun setChargerPort(name: String, port: String, enabled: Boolean) =
+        chargerAction(name, "set-port", "port" to port, "enabled" to enabled)
+
+    suspend fun setChargerProtocol(name: String, port: String, protocol: String, enabled: Boolean) =
+        chargerAction(name, "set-protocol", "port" to port, "protocol" to protocol, "enabled" to enabled)
+
+    suspend fun setChargerTimer(name: String, port: String, minutes: Int) =
+        chargerAction(name, "set-timer", "port" to port, "minutes" to minutes)
+
+    private suspend fun chargerAction(name: String, action: String, vararg pairs: Pair<String, Any>): JSONObject {
+        val body = obj("name" to action, *pairs)
+        return request("POST", "/api/v1/charger/$name/action", body)
     }
 
     private fun obj(vararg pairs: Pair<String, Any>) = JSONObject().apply { pairs.forEach { put(it.first, it.second) } }
