@@ -97,7 +97,7 @@ Charger actions use one of these request forms:
 {"name":"set-protocol","port":"c1","protocol":"pps","enabled":false}
 ```
 
-The sensor scanner only publishes decoded measurements for the configured FE95/MiBeacon sensor. `POST /api/v1/sensor/report` is intentionally kept for compatibility with the existing Android BLE gateway, but is no longer required once router-native scanning is configured.
+The sensor scanner only publishes decoded measurements for the configured FE95/MiBeacon sensor. `POST /api/v1/sensor/report` remains as a legacy/external compatibility endpoint; the Android client no longer scans BLE, stores a bind key, decrypts MiBeacon frames, or uses this endpoint.
 
 ## Diagnostics
 
