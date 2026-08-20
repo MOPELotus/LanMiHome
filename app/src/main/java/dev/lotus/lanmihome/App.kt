@@ -58,7 +58,7 @@ private suspend fun <T> withTargetNetwork(
         val network = target.network ?: return block()
         val cm = context.getSystemService(ConnectivityManager::class.java)
             ?: throw ApiException("无法取得 ConnectivityManager")
-        val previous = ConnectivityManager.getBoundNetworkForProcess()
+        val previous = cm.boundNetworkForProcess
         if (!cm.bindProcessToNetwork(network)) {
             throw ApiException("无法绑定当前 Wi-Fi 网络")
         }
