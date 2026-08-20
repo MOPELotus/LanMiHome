@@ -245,7 +245,7 @@ class NightNodeService : Service() {
         val intent = Intent(this, MainActivity::class.java)
         val pending = PendingIntent.getActivity(this, 0, intent, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
         return Notification.Builder(this, NIGHT_CHANNEL)
-            .setSmallIcon(android.R.drawable.stat_sys_wifi)
+            .setSmallIcon(android.R.drawable.ic_dialog_info)
             .setContentTitle("LAN 米家 · Night Node")
             .setContentText(detail)
             .setContentIntent(pending)
