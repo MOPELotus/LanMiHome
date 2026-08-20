@@ -150,7 +150,10 @@ class CuktechController:
                 raise ValueError(f"PIID {piid} value must be in {limits[0]}..{limits[1]}")
         result = await self.miot.set(SIID_CHARGER, piid, value)
         self.process_deferred(result)
-        if result.ok:
+        # PIID 14 is a write-only screen-page command.  A successful SET
+        # only means the command was acknowledged; it is not a device state
+        # value that can be read back and therefore must not enter settings.
+        if result.ok and piid != 14:
             self.state.apply_setting(piid, value)
         return result
 
