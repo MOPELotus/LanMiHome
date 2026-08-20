@@ -79,6 +79,7 @@ internal class MorningHandoffController(
         }
 
         if (NightNodeRuntime.consumeHandoffTestRequest()) {
+            NightNodePrefs.setSnoozeUntil(context, 0L)
             wifiHits = 0
             lastScanElapsed = 0L
             testModeActive = true
@@ -96,21 +97,12 @@ internal class MorningHandoffController(
             return
         }
 
-        if (!config.handoffEnabled || !insideWindow()) {
-            wifiHits = 0
-            if (deadlineElapsed == null) publishIdle()
-            return
-        }
-
-        val today = LocalDate.now().toString()
-        if (NightNodePrefs.cancelledDate(context) == today) {
-            wifiHits = 0
-            NightNodeRuntime.update { it.copy(handoffState = "cancelled", handoffReason = "本次已取消") }
-            return
-        }
-
+        // A user-requested delay is a commitment to resume this handoff later,
+        // not a new trigger. Therefore it must survive the original 05:00-06:00
+        // trigger window and also work from the explicit out-of-window test mode.
+        val nowWall = System.currentTimeMillis()
         val snoozeUntil = NightNodePrefs.snoozeUntil(context)
-        if (snoozeUntil > System.currentTimeMillis()) {
+        if (snoozeUntil > nowWall) {
             wifiHits = 0
             deadlineElapsed = null
             NightNodeRuntime.update {
@@ -125,6 +117,26 @@ internal class MorningHandoffController(
             return
         } else if (snoozeUntil != 0L) {
             NightNodePrefs.setSnoozeUntil(context, 0L)
+            NightNodeRuntime.log("晨间交接延后结束，恢复默认交接")
+            startOrShortenCountdown(
+                seconds = config.handoffWifiDelaySeconds,
+                reason = "延后结束",
+                forcePrompt = true,
+            )
+            return
+        }
+
+        if (!config.handoffEnabled || !insideWindow()) {
+            wifiHits = 0
+            if (deadlineElapsed == null) publishIdle()
+            return
+        }
+
+        val today = LocalDate.now().toString()
+        if (NightNodePrefs.cancelledDate(context) == today) {
+            wifiHits = 0
+            NightNodeRuntime.update { it.copy(handoffState = "cancelled", handoffReason = "本次已取消") }
+            return
         }
 
         if (isCharging() && deadlineElapsed == null) {
@@ -142,6 +154,7 @@ internal class MorningHandoffController(
 
     fun executeNow() {
         testModeActive = false
+        NightNodePrefs.setSnoozeUntil(context, 0L)
         NightNodeRuntime.log("用户选择立即晨间交接")
         deadlineElapsed = SystemClock.elapsedRealtime()
         NightNodeRuntime.update {
@@ -156,7 +169,7 @@ internal class MorningHandoffController(
         deadlineElapsed = null
         wifiHits = 0
         cancelPromptNotification()
-        NightNodeRuntime.log("晨间交接已延后 5 分钟")
+        NightNodeRuntime.log("晨间交接已延后 5 分钟；到期后将恢复交接")
         NightNodeRuntime.update {
             it.copy(
                 handoffState = "delayed",
