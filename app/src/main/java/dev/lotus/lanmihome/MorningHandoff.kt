@@ -13,12 +13,7 @@ import android.os.SystemClock
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.*
 import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -71,6 +66,7 @@ internal class MorningHandoffController(
         val deadline = deadlineElapsed
         if (deadline != null) {
             if (nowElapsed >= deadline) {
+                deadlineElapsed = null
                 NightNodeRuntime.log("晨间交接倒计时结束，停止 Night Node / SoftAP")
                 NightNodeRuntime.update { it.copy(handoffState = "executing") }
                 cancelPromptNotification()
@@ -271,8 +267,7 @@ internal class MorningHandoffController(
     }
 
     private fun ensureChannel() {
-        val manager = context.getSystemService(NotificationManager::class.java)
-        manager.createNotificationChannel(
+        context.getSystemService(NotificationManager::class.java).createNotificationChannel(
             NotificationChannel(HANDOFF_CHANNEL, "LAN 米家晨间交接", NotificationManager.IMPORTANCE_HIGH)
         )
     }
@@ -295,9 +290,9 @@ internal class MorningHandoffController(
             .setContentText("$reason · 默认倒计时执行")
             .setOngoing(true)
             .setOnlyAlertOnce(false)
-            .addAction(Notification.Action.Builder(null, "立即交接", pending(nowIntent, 9101)).build())
-            .addAction(Notification.Action.Builder(null, "延后 5 分钟", pending(delayIntent, 9102)).build())
-            .addAction(Notification.Action.Builder(null, "取消本次", pending(cancelIntent, 9103)).build())
+            .addAction(Notification.Action.Builder(android.R.drawable.ic_media_play, "立即交接", pending(nowIntent, 9101)).build())
+            .addAction(Notification.Action.Builder(android.R.drawable.ic_menu_recent_history, "延后 5 分钟", pending(delayIntent, 9102)).build())
+            .addAction(Notification.Action.Builder(android.R.drawable.ic_menu_close_clear_cancel, "取消本次", pending(cancelIntent, 9103)).build())
             .build()
         context.getSystemService(NotificationManager::class.java).notify(HANDOFF_NOTIFICATION_ID, notification)
 
