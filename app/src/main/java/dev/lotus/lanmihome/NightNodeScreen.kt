@@ -1,29 +1,11 @@
 package dev.lotus.lanmihome
 
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Button
-import androidx.compose.material3.HorizontalDivider
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Switch
-import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
@@ -91,6 +73,33 @@ fun NightNodeScreen(onUseLocal: () -> Unit) {
             }
         }
 
+        Section("晨间交接") {
+            Text("状态：${handoffStateLabel(status)}")
+            status.handoffReason?.let { Text("原因：$it") }
+            if (status.handoffWifiHits > 0) {
+                Text("Wi-Fi 确认：${status.handoffWifiHits}/${config.handoffConfirmScans}")
+            }
+            if (status.handoffSeenSsids.isNotEmpty()) {
+                Text("已看到：${status.handoffSeenSsids.joinToString(", ")}")
+            }
+            status.handoffDeadlineMillis?.let { deadline ->
+                val remain = ((deadline - System.currentTimeMillis()).coerceAtLeast(0L) + 999L) / 1000L
+                if (status.handoffState == "countdown") Text("默认确认：${remain}s 后交接")
+            }
+            Text(
+                "${config.handoffWindowStart}–${config.handoffWindowEnd} 生效；充电可触发 ${config.handoffChargeDelaySeconds}s 倒计时。${config.handoffScanInterface} 连续 ${config.handoffConfirmScans} 次看到 ${config.handoffSsids} 中任一 SSID，可独立触发并缩短为 ${config.handoffWifiDelaySeconds}s。",
+                style = MaterialTheme.typography.bodySmall,
+            )
+            OutlinedButton(
+                onClick = { NightNodeService.testHandoff(context) },
+                enabled = status.running && status.root,
+            ) { Text("测试晨间交接（忽略时段）") }
+            Text(
+                "测试会真实执行交接：若当前能扫描到目标 SSID，会弹出默认确认界面并在 ${config.handoffWifiDelaySeconds}s 后停止 Night Node / SoftAP；可在弹窗中立即交接、延后 5 分钟或取消本次。",
+                style = MaterialTheme.typography.bodySmall,
+            )
+        }
+
         Section("接管配置") {
             Text("SSID：${config.ssid.ifBlank { "未配置" }}")
             Text("热点：${if (config.manageHotspot) "由 App/root 管理" else "使用已经开启的热点"}")
@@ -141,6 +150,14 @@ fun NightNodeScreen(onUseLocal: () -> Unit) {
     }
 }
 
+private fun handoffStateLabel(status: NightNodeStatus): String = when (status.handoffState) {
+    "countdown" -> "倒计时"
+    "delayed" -> "已延后"
+    "cancelled" -> "本次已取消"
+    "executing" -> "正在交接"
+    else -> "等待触发"
+}
+
 @Composable
 private fun NightNodeConfigDialog(
     initial: NightNodeConfig,
@@ -154,7 +171,16 @@ private fun NightNodeConfigDialog(
     var port by remember(initial) { mutableStateOf(initial.port.toString()) }
     var fanToken by remember(initial) { mutableStateOf("") }
     var lampToken by remember(initial) { mutableStateOf("") }
+    var handoffEnabled by remember(initial) { mutableStateOf(initial.handoffEnabled) }
+    var handoffWindowStart by remember(initial) { mutableStateOf(initial.handoffWindowStart) }
+    var handoffWindowEnd by remember(initial) { mutableStateOf(initial.handoffWindowEnd) }
+    var handoffScanInterface by remember(initial) { mutableStateOf(initial.handoffScanInterface) }
+    var handoffSsids by remember(initial) { mutableStateOf(initial.handoffSsids) }
+    var handoffChargeDelay by remember(initial) { mutableStateOf(initial.handoffChargeDelaySeconds.toString()) }
+    var handoffWifiDelay by remember(initial) { mutableStateOf(initial.handoffWifiDelaySeconds.toString()) }
     var error by remember { mutableStateOf<String?>(null) }
+
+    fun validClock(value: String): Boolean = Regex("^(?:[01]\\d|2[0-3]):[0-5]\\d$").matches(value)
 
     fun save() {
         val parsedPort = port.toIntOrNull()
@@ -181,6 +207,24 @@ private fun NightNodeConfigDialog(
             error = "台灯 token 应为 16 字节 / 32 位十六进制"
             return
         }
+        if (!validClock(handoffWindowStart) || !validClock(handoffWindowEnd)) {
+            error = "晨间交接时段必须为 HH:mm"
+            return
+        }
+        if (handoffScanInterface.isBlank()) {
+            error = "扫描接口不能为空"
+            return
+        }
+        if (handoffSsids.split(',').map(String::trim).none(String::isNotBlank)) {
+            error = "至少配置一个交接目标 SSID"
+            return
+        }
+        val chargeDelay = handoffChargeDelay.toIntOrNull()
+        val wifiDelay = handoffWifiDelay.toIntOrNull()
+        if (chargeDelay == null || chargeDelay !in 15..1800 || wifiDelay == null || wifiDelay !in 5..300) {
+            error = "交接延迟范围：充电 15–1800 秒，Wi-Fi 5–300 秒"
+            return
+        }
         onSave(
             initial.copy(
                 manageHotspot = manageHotspot,
@@ -190,6 +234,13 @@ private fun NightNodeConfigDialog(
                 port = parsedPort,
                 fanToken = nextFan ?: "",
                 lampToken = nextLamp ?: "",
+                handoffEnabled = handoffEnabled,
+                handoffWindowStart = handoffWindowStart,
+                handoffWindowEnd = handoffWindowEnd,
+                handoffScanInterface = handoffScanInterface.trim(),
+                handoffSsids = handoffSsids.split(',').map(String::trim).filter(String::isNotBlank).joinToString(","),
+                handoffChargeDelaySeconds = chargeDelay,
+                handoffWifiDelaySeconds = wifiDelay,
             )
         )
     }
@@ -245,8 +296,37 @@ private fun NightNodeConfigDialog(
                     visualTransformation = PasswordVisualTransformation(),
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Ascii),
                 )
+                HorizontalDivider()
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    Text("启用晨间交接")
+                    Switch(checked = handoffEnabled, onCheckedChange = { handoffEnabled = it })
+                }
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(handoffWindowStart, { handoffWindowStart = it }, label = { Text("开始") }, modifier = Modifier.weight(1f), singleLine = true)
+                    OutlinedTextField(handoffWindowEnd, { handoffWindowEnd = it }, label = { Text("结束") }, modifier = Modifier.weight(1f), singleLine = true)
+                }
+                OutlinedTextField(handoffScanInterface, { handoffScanInterface = it }, label = { Text("Wi-Fi 扫描接口") }, singleLine = true)
+                OutlinedTextField(handoffSsids, { handoffSsids = it }, label = { Text("主路由 SSID（逗号分隔）") }, singleLine = true)
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(
+                        handoffChargeDelay,
+                        { handoffChargeDelay = it.filter(Char::isDigit) },
+                        label = { Text("充电延迟/秒") },
+                        modifier = Modifier.weight(1f),
+                        singleLine = true,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    )
+                    OutlinedTextField(
+                        handoffWifiDelay,
+                        { handoffWifiDelay = it.filter(Char::isDigit) },
+                        label = { Text("Wi-Fi 延迟/秒") },
+                        modifier = Modifier.weight(1f),
+                        singleLine = true,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    )
+                }
                 Text(
-                    "热点使用 WPA2-Personal / 2.4 GHz；SSID 和密码需要与要接管的原 AP 一致。",
+                    "热点使用 WPA2-Personal / 2.4 GHz；SSID 和密码需要与要接管的原 AP 一致。晨间交接默认连续扫描 2 次确认目标 Wi-Fi；充电和 Wi-Fi 任一条件都可触发。",
                     style = MaterialTheme.typography.bodySmall,
                 )
                 error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
