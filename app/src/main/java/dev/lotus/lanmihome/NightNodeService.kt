@@ -16,29 +16,11 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.io.BufferedReader
 import java.io.InputStreamReader
-import java.net.DatagramPacket
-import java.net.DatagramSocket
-import java.net.Inet4Address
-import java.net.InetAddress
 import java.net.InetSocketAddress
-import java.net.NetworkInterface
 import java.net.ServerSocket
 import java.net.Socket
-import java.nio.ByteBuffer
-import java.nio.ByteOrder
-import java.security.MessageDigest
-import java.text.SimpleDateFormat
-import java.util.Collections
-import java.util.Date
-import java.util.Locale
-import java.util.TimeZone
 import java.util.concurrent.Executors
-import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
-import java.util.concurrent.atomic.AtomicInteger
-import javax.crypto.Cipher
-import javax.crypto.spec.IvParameterSpec
-import javax.crypto.spec.SecretKeySpec
 
 private class NightHttpServer(private val port: Int, private val devices: NightDeviceManager) {
     private val running = AtomicBoolean(false)
@@ -119,7 +101,7 @@ private class NightHttpServer(private val port: Int, private val devices: NightD
                 .put("fan", NightNodeRuntime.snapshot().fanIp != null)
                 .put("lamp", NightNodeRuntime.snapshot().lampIp != null)
             "/api/v1/capabilities" -> JSONObject().put("api", "v1").put("fan", true).put("lamp", true)
-                .put("sensor", false).put("chargers", JSONArray()).put("features", JSONArray().put("night-node").put("miot"))
+                .put("sensor", false).put("chargers", JSONArray()).put("features", JSONArray().put("night-node").put("miot").put("morning-handoff"))
             "/api/v1/fan" -> devices.fanState()
             "/api/v1/lamp" -> devices.lampState()
             "/api/v1/sensor" -> JSONObject().put("available", false).put("reports", 0)
@@ -166,6 +148,7 @@ class NightNodeService : Service() {
     private lateinit var config: NightNodeConfig
     private lateinit var devices: NightDeviceManager
     private var http: NightHttpServer? = null
+    private var handoff: MorningHandoffController? = null
 
     override fun onCreate() {
         super.onCreate()
@@ -178,20 +161,37 @@ class NightNodeService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        if (worker?.isAlive == true) {
-            if (intent?.action == ACTION_DISCOVER) NightNodeRuntime.requestDiscovery()
-            return START_STICKY
+        when (intent?.action) {
+            ACTION_DISCOVER -> NightNodeRuntime.requestDiscovery()
+            ACTION_HANDOFF_TEST -> NightNodeRuntime.requestHandoffTest()
+            ACTION_HANDOFF_NOW -> handoff?.executeNow()
+            ACTION_HANDOFF_DELAY -> handoff?.delayFiveMinutes()
+            ACTION_HANDOFF_CANCEL -> handoff?.cancelForToday()
         }
+
+        if (worker?.isAlive == true) return START_STICKY
+
         config = NightNodePrefs.read(this)
         devices = NightDeviceManager(config)
         stopping.set(false)
-        NightNodeRuntime.update { it.copy(running = true, hotspotManaged = config.manageHotspot, serverPort = config.port, lastError = null) }
+        NightNodeRuntime.update {
+            it.copy(
+                running = true,
+                hotspotManaged = config.manageHotspot,
+                serverPort = config.port,
+                lastError = null,
+            )
+        }
         NightNodeRuntime.log("Night Node 启动")
         try {
             http = NightHttpServer(config.port, devices).also { it.start() }
         } catch (e: Exception) {
             NightNodeRuntime.log("HTTP 服务启动失败：${e.message}")
             NightNodeRuntime.update { it.copy(lastError = "HTTP: ${e.message}") }
+        }
+        handoff = MorningHandoffController(this, config) {
+            stopping.set(true)
+            stopSelf()
         }
         worker = Thread({ runLoop() }, "lanmihome-night-worker").apply { isDaemon = true; start() }
         return START_STICKY
@@ -232,6 +232,8 @@ class NightNodeService : Service() {
                         lastDiscovery = now
                     }
                 }
+
+                handoff?.tick(root)
                 updateNotification()
             } catch (e: Exception) {
                 NightNodeRuntime.log("worker: ${e.javaClass.simpleName}: ${e.message}")
@@ -259,6 +261,11 @@ class NightNodeService : Service() {
             append(s.hotspotAddress ?: "等待热点")
             if (s.fanIp != null) append(" · 风扇在线")
             if (s.lampIp != null) append(" · 台灯在线")
+            if (s.handoffState == "countdown") {
+                val remain = s.handoffDeadlineMillis?.let { ((it - System.currentTimeMillis()).coerceAtLeast(0L) + 999L) / 1000L }
+                append(" · 交接")
+                if (remain != null) append(" ${remain}s")
+            }
         }
         getSystemService(NotificationManager::class.java).notify(NIGHT_NOTIFICATION_ID, notification(detail))
     }
@@ -266,11 +273,26 @@ class NightNodeService : Service() {
     override fun onDestroy() {
         stopping.set(true)
         worker?.join(1500)
+        handoff?.shutdown()
+        handoff = null
         http?.stop()
         if (::config.isInitialized) NightNetwork.stopHotspot(config)
         runCatching { wakeLock?.takeIf { it.isHeld }?.release() }
         wakeLock = null
-        NightNodeRuntime.update { it.copy(running = false, hotspotInterface = null, hotspotAddress = null, fanIp = null, lampIp = null) }
+        NightNodeRuntime.update {
+            it.copy(
+                running = false,
+                hotspotInterface = null,
+                hotspotAddress = null,
+                fanIp = null,
+                lampIp = null,
+                handoffState = "idle",
+                handoffReason = null,
+                handoffDeadlineMillis = null,
+                handoffWifiHits = 0,
+                handoffSeenSsids = emptyList(),
+            )
+        }
         NightNodeRuntime.log("Night Node 已停止")
         super.onDestroy()
     }
@@ -278,11 +300,14 @@ class NightNodeService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     companion object {
-        private const val ACTION_DISCOVER = "dev.lotus.lanmihome.action.NIGHT_DISCOVER"
+        internal const val ACTION_DISCOVER = "dev.lotus.lanmihome.action.NIGHT_DISCOVER"
+        internal const val ACTION_HANDOFF_TEST = "dev.lotus.lanmihome.action.HANDOFF_TEST"
+        internal const val ACTION_HANDOFF_NOW = "dev.lotus.lanmihome.action.HANDOFF_NOW"
+        internal const val ACTION_HANDOFF_DELAY = "dev.lotus.lanmihome.action.HANDOFF_DELAY"
+        internal const val ACTION_HANDOFF_CANCEL = "dev.lotus.lanmihome.action.HANDOFF_CANCEL"
 
         fun start(context: Context) {
-            val intent = Intent(context, NightNodeService::class.java)
-            context.startForegroundService(intent)
+            context.startForegroundService(Intent(context, NightNodeService::class.java))
         }
 
         fun stop(context: Context) {
@@ -295,8 +320,18 @@ class NightNodeService : Service() {
         }
 
         fun discover(context: Context) {
-            val intent = Intent(context, NightNodeService::class.java).setAction(ACTION_DISCOVER)
-            context.startForegroundService(intent)
+            context.startForegroundService(Intent(context, NightNodeService::class.java).setAction(ACTION_DISCOVER))
+        }
+
+        fun testHandoff(context: Context) {
+            context.startForegroundService(Intent(context, NightNodeService::class.java).setAction(ACTION_HANDOFF_TEST))
+        }
+
+        internal fun handoffActionIntent(context: Context, action: String): Intent =
+            Intent(context, NightNodeService::class.java).setAction(action)
+
+        internal fun sendHandoffAction(context: Context, action: String) {
+            context.startForegroundService(handoffActionIntent(context, action))
         }
     }
 }
