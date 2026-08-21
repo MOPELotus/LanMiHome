@@ -6,6 +6,7 @@ STOP=10
 
 SERVICE_DIR=/lotusemmc/lanmihome
 SERVICE_PY="$SERVICE_DIR/lanmihome.py"
+W96D_PY="$SERVICE_DIR/w96d_service.py"
 SUPERVISOR_PY="$SERVICE_DIR/recovery_supervisor.py"
 SERVICE_CONFIG="$SERVICE_DIR/config.json"
 SERVICE_PYTHONPATH="/lotusemmc/miot/python:$SERVICE_DIR"
@@ -18,6 +19,16 @@ start_service() {
     procd_set_param stdout 1
     procd_set_param stderr 1
     procd_close_instance
+
+    if [ -f "$W96D_PY" ]; then
+        procd_open_instance w96d
+        procd_set_param command /usr/bin/python3 "$W96D_PY" --config "$SERVICE_CONFIG"
+        procd_set_param env PYTHONPATH="$SERVICE_PYTHONPATH"
+        procd_set_param respawn 3600 5 5
+        procd_set_param stdout 1
+        procd_set_param stderr 1
+        procd_close_instance
+    fi
 
     if [ -f "$SUPERVISOR_PY" ]; then
         procd_open_instance recovery-supervisor
