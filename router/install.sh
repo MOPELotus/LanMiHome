@@ -40,8 +40,6 @@ done
 if [ -n "$missing" ]; then
     echo "Installing userspace packages:$missing"
     opkg update
-    # These are userspace packages; unlike kernel modules they do not depend on
-    # the custom kernel ABI hash.
     opkg install $missing
 fi
 
@@ -54,6 +52,7 @@ SRC="$TMP/LanMiHome-$BRANCH"
 
 for required in \
     "$SRC/router/lanmihome.py" \
+    "$SRC/router/w96d_service.py" \
     "$SRC/router/recovery_supervisor.py" \
     "$SRC/router/lanmihome.init" \
     "$SRC/router/config.example.json" \
@@ -78,20 +77,51 @@ for svc in /etc/init.d/*; do
 done
 
 # Back up the old backend and local configuration without printing any secret.
-for file in lanmihome.py recovery_supervisor.py config.json config.example.json; do
+for file in lanmihome.py w96d_service.py recovery_supervisor.py config.json config.example.json; do
     [ -f "$BASE/$file" ] && cp -p "$BASE/$file" "$BACKUP/$file"
 done
 
 cp "$SRC/router/lanmihome.py" "$BASE/lanmihome.py"
+cp "$SRC/router/w96d_service.py" "$BASE/w96d_service.py"
 cp "$SRC/router/recovery_supervisor.py" "$BASE/recovery_supervisor.py"
 cp "$SRC/router/config.example.json" "$BASE/config.example.json"
 rm -rf "$BASE/lanmihome_cuktech"
 cp -a "$SRC/tools/cuktech_ble_probe/src/lanmihome_cuktech" "$BASE/lanmihome_cuktech"
-chmod 0755 "$BASE/lanmihome.py" "$BASE/recovery_supervisor.py"
+chmod 0755 "$BASE/lanmihome.py" "$BASE/w96d_service.py" "$BASE/recovery_supervisor.py"
 
 if [ ! -f "$BASE/config.json" ]; then
     cp "$BASE/config.example.json" "$BASE/config.json"
     echo "No existing config.json was found; created one from the example. Fill secrets locally before use."
+else
+    # Existing installations predate W96D. Add only a non-secret default block;
+    # preserve all Xiaomi/CUKTECH/BLE secrets exactly as they are.
+    /usr/bin/python3 - "$BASE/config.json" <<'PY'
+import json, os, sys, tempfile
+path = sys.argv[1]
+with open(path, "r", encoding="utf-8") as f:
+    cfg = json.load(f)
+if "w96d" not in cfg:
+    cfg["w96d"] = {
+        "enabled": True,
+        "name_prefix": "W96D",
+        "address": "",
+        "bind": "0.0.0.0",
+        "port": 8766,
+        "scan_timeout": 8,
+        "connect_timeout": 12,
+        "keep_awake": True,
+    }
+    directory = os.path.dirname(path) or "."
+    fd, tmp = tempfile.mkstemp(prefix="config.json.", dir=directory)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(cfg, f, ensure_ascii=False, indent=2)
+            f.write("\n")
+        os.replace(tmp, path)
+    finally:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
+PY
 fi
 chmod 0600 "$BASE/config.json"
 
@@ -102,7 +132,9 @@ chmod 0755 /etc/init.d/lanmihome
 # Xiaomi tokens, BLE bind keys or CUKTECH tokens.
 PYTHONPATH="$PYTHONPATH_VALUE" /usr/bin/python3 "$BASE/lanmihome.py" \
     --config "$BASE/config.json" --check-config
-/usr/bin/python3 -m py_compile "$BASE/recovery_supervisor.py"
+PYTHONPATH="$PYTHONPATH_VALUE" /usr/bin/python3 "$BASE/w96d_service.py" \
+    --config "$BASE/config.json" --check-config
+/usr/bin/python3 -m py_compile "$BASE/recovery_supervisor.py" "$BASE/w96d_service.py"
 
 /etc/init.d/lanmihome enable
 /etc/init.d/lanmihome restart
@@ -111,9 +143,11 @@ sleep 2
 echo
 echo "LanMiHome router backend installed."
 echo "  service   : /etc/init.d/lanmihome"
-echo "  backend   : $BASE/lanmihome.py"
+echo "  backend   : $BASE/lanmihome.py (:8765)"
+echo "  W96D      : $BASE/w96d_service.py (:8766)"
 echo "  recovery  : $BASE/recovery_supervisor.py"
 echo "  config    : $BASE/config.json (preserved, mode 0600)"
 echo "  backup    : $BACKUP"
-echo "  logs      : logread -e lanmihome -e recovery-supervisor -e cuktech"
+echo "  logs      : logread -e lanmihome -e lanmihome-w96d -e recovery-supervisor -e cuktech"
 echo "  health    : wget -qO- http://127.0.0.1:8765/api/v1/health"
+echo "  W96D      : wget -qO- http://127.0.0.1:8766/api/v1/w96d"
