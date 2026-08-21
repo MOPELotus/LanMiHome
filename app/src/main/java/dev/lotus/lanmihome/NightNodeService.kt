@@ -101,7 +101,7 @@ private class NightHttpServer(private val port: Int, private val devices: NightD
                 .put("fan", NightNodeRuntime.snapshot().fanIp != null)
                 .put("lamp", NightNodeRuntime.snapshot().lampIp != null)
             "/api/v1/capabilities" -> JSONObject().put("api", "v1").put("fan", true).put("lamp", true)
-                .put("sensor", false).put("chargers", JSONArray()).put("features", JSONArray().put("night-node").put("miot").put("morning-handoff"))
+                .put("sensor", false).put("chargers", JSONArray()).put("features", JSONArray().put("night-node").put("miot").put("morning-handoff").put("w96d-sidecar"))
             "/api/v1/fan" -> devices.fanState()
             "/api/v1/lamp" -> devices.lampState()
             "/api/v1/sensor" -> JSONObject().put("available", false).put("reports", 0)
@@ -148,6 +148,7 @@ class NightNodeService : Service() {
     private lateinit var config: NightNodeConfig
     private lateinit var devices: NightDeviceManager
     private var http: NightHttpServer? = null
+    private var w96d: W96DNodeServer? = null
     private var handoff: MorningHandoffController? = null
 
     override fun onCreate() {
@@ -188,6 +189,11 @@ class NightNodeService : Service() {
         } catch (e: Exception) {
             NightNodeRuntime.log("HTTP 服务启动失败：${e.message}")
             NightNodeRuntime.update { it.copy(lastError = "HTTP: ${e.message}") }
+        }
+        try {
+            w96d = W96DNodeServer(this).also { it.start() }
+        } catch (e: Exception) {
+            NightNodeRuntime.log("W96D sidecar 启动失败：${e.message}")
         }
         handoff = MorningHandoffController(this, config) {
             stopping.set(true)
@@ -275,6 +281,8 @@ class NightNodeService : Service() {
         worker?.join(1500)
         handoff?.shutdown()
         handoff = null
+        w96d?.stop()
+        w96d = null
         http?.stop()
         if (::config.isInitialized) NightNetwork.stopHotspot(config)
         runCatching { wakeLock?.takeIf { it.isHeld }?.release() }
