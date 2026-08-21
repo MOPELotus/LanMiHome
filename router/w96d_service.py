@@ -197,21 +197,20 @@ class W96DDriver:
             return {**base, "error": "disabled"}
         try:
             await self.ensure_connected()
-            power_raw, speed_raw, nature_raw, light_raw, shutdown_raw, speeds_raw = await asyncio.gather(
-                self._read_optional(POWER),
-                self._read_optional(FAN_SPEED),
-                self._read_optional(NATURE_WIND),
-                self._read_optional(LIGHT_CONTROL),
-                self._read_optional(SHUTDOWN_DELAY),
-                self._read_optional(SPEED_CALIB),
-            )
-            turbo_raw, turbo_rem_raw, battery_raw, pwr_raw, motor_raw = await asyncio.gather(
-                self._read_optional(TURBO_MODE),
-                self._read_optional(TURBO_REMAINING),
-                self._read_optional(BATTERY_INFO),
-                self._read_optional(POWER_STATUS),
-                self._read_optional(MOTOR_INFO),
-            )
+            # Keep GATT operations strictly sequential. BlueZ/ATT is effectively
+            # single-flight and parallel read requests are a common source of
+            # org.bluez.Error.InProgress / intermittent disconnects.
+            power_raw = await self._read_optional(POWER)
+            speed_raw = await self._read_optional(FAN_SPEED)
+            nature_raw = await self._read_optional(NATURE_WIND)
+            light_raw = await self._read_optional(LIGHT_CONTROL)
+            shutdown_raw = await self._read_optional(SHUTDOWN_DELAY)
+            speeds_raw = await self._read_optional(SPEED_CALIB)
+            turbo_raw = await self._read_optional(TURBO_MODE)
+            turbo_rem_raw = await self._read_optional(TURBO_REMAINING)
+            battery_raw = await self._read_optional(BATTERY_INFO)
+            pwr_raw = await self._read_optional(POWER_STATUS)
+            motor_raw = await self._read_optional(MOTOR_INFO)
             out = {
                 **base,
                 "available": True,
