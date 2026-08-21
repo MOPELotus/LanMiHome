@@ -25,6 +25,16 @@
     "bind_key": "PUT_16_BYTE_HEX_BINDKEY_HERE",
     "stale_seconds": 180
   },
+  "w96d": {
+    "enabled": true,
+    "name_prefix": "W96D",
+    "address": "",
+    "bind": "0.0.0.0",
+    "port": 8766,
+    "scan_timeout": 8,
+    "connect_timeout": 12,
+    "keep_awake": true
+  },
   "chargers": [
     {
       "enabled": true,
