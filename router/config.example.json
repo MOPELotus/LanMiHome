@@ -19,7 +19,7 @@
       "timeout": 3
     },
     "w96d": {
-      "enabled": true,
+      "enabled": false,
       "name": "W96D New",
       "address": "AA:BB:CC:DD:EE:FF",
       "mode": "home",
