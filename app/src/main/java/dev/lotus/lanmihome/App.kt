@@ -18,7 +18,7 @@ import java.net.Inet4Address
 internal const val MAIN_PREFS = "lanmihome"
 internal const val DEFAULT_SERVER_URL = "http://10.0.0.1:8765"
 
-private enum class Tab { FAN, LAMP, SENSOR, CHARGER, NIGHT }
+private enum class Tab { FAN, W96D, LAMP, SENSOR, CHARGER, NIGHT }
 private enum class BackendKind { PRIMARY, WIFI_GATEWAY, LOCAL }
 
 private data class BackendTarget(
@@ -107,8 +107,6 @@ fun LanMiHomeApp() {
         if (activeKind == BackendKind.LOCAL) {
             targets += BackendTarget(activeBase, BackendKind.LOCAL)
         } else if (!online && gateway != null && gateway.url != baseUrl) {
-            // The selected backend has gone offline after a Wi-Fi change. In the
-            // Night Node case this avoids wasting a timeout on the old router.
             targets += gateway
         } else {
             resolvedActiveTarget()?.let { targets += it }
@@ -128,7 +126,7 @@ fun LanMiHomeApp() {
                 Tab.LAMP -> lamp = api.lamp()
                 Tab.SENSOR -> sensor = api.sensor()
                 Tab.CHARGER -> chargers = api.chargers()
-                Tab.NIGHT -> Unit
+                Tab.W96D, Tab.NIGHT -> Unit
             }
             recovery = runCatching { api.recovery() }.getOrNull()
         }
@@ -138,13 +136,9 @@ fun LanMiHomeApp() {
         silent: Boolean = true,
         rediscoverBackend: Boolean = false,
     ) {
-        if (tab == Tab.NIGHT) return
+        if (tab == Tab.NIGHT || tab == Tab.W96D) return
 
-        val targets = if (rediscoverBackend) {
-            rediscoveryTargets()
-        } else {
-            listOfNotNull(resolvedActiveTarget())
-        }
+        val targets = if (rediscoverBackend) rediscoveryTargets() else listOfNotNull(resolvedActiveTarget())
 
         var lastError: Exception? = null
         for (target in targets) {
@@ -168,12 +162,10 @@ fun LanMiHomeApp() {
                 Tab.LAMP -> lamp = LampState(false, lastError?.message)
                 Tab.SENSOR -> sensor = null
                 Tab.CHARGER -> chargers = emptyList()
-                Tab.NIGHT -> Unit
+                Tab.W96D, Tab.NIGHT -> Unit
             }
         }
-        if (!silent) {
-            snack.showSnackbar("连接失败：${lastError?.message ?: "无可用服务端"}")
-        }
+        if (!silent) snack.showSnackbar("连接失败：${lastError?.message ?: "无可用服务端"}")
     }
 
     fun command(block: suspend (LanMiHomeApi) -> Unit) {
@@ -195,7 +187,7 @@ fun LanMiHomeApp() {
     }
 
     LaunchedEffect(baseUrl, tab) {
-        if (tab == Tab.NIGHT) return@LaunchedEffect
+        if (tab == Tab.NIGHT || tab == Tab.W96D) return@LaunchedEffect
         while (isActive) {
             if (!busy) refresh()
             delay(if (tab == Tab.CHARGER) 3000 else 5000)
@@ -212,6 +204,7 @@ fun LanMiHomeApp() {
                         Text(
                             when {
                                 tab == Tab.NIGHT -> "夜间节点管理"
+                                tab == Tab.W96D -> "W96D · LAN 节点 / 本机 BLE 自动选择"
                                 online && activeBase == baseUrl -> "主服务端已连接"
                                 online && activeKind == BackendKind.LOCAL -> "本机 Night Node · $activeBase"
                                 online -> "备用节点已连接 · $activeBase"
@@ -222,17 +215,14 @@ fun LanMiHomeApp() {
                     }
                 },
                 actions = {
-                    if (tab != Tab.NIGHT) {
+                    if (tab != Tab.NIGHT && tab != Tab.W96D) {
                         TextButton(
                             enabled = !busy,
                             onClick = {
                                 scope.launch {
                                     busy = true
-                                    try {
-                                        refresh(silent = false, rediscoverBackend = true)
-                                    } finally {
-                                        busy = false
-                                    }
+                                    try { refresh(silent = false, rediscoverBackend = true) }
+                                    finally { busy = false }
                                 }
                             },
                         ) { Text("刷新") }
@@ -244,6 +234,7 @@ fun LanMiHomeApp() {
         bottomBar = {
             NavigationBar {
                 NavigationBarItem(tab == Tab.FAN, { tab = Tab.FAN }, icon = { Text("◉") }, label = { Text("风扇") })
+                NavigationBarItem(tab == Tab.W96D, { tab = Tab.W96D }, icon = { Text("✦") }, label = { Text("床扇") })
                 NavigationBarItem(tab == Tab.LAMP, { tab = Tab.LAMP }, icon = { Text("●") }, label = { Text("台灯") })
                 NavigationBarItem(tab == Tab.SENSOR, { tab = Tab.SENSOR }, icon = { Text("⌁") }, label = { Text("温湿度") })
                 NavigationBarItem(tab == Tab.CHARGER, { tab = Tab.CHARGER }, icon = { Text("⚡") }, label = { Text("充电头") })
@@ -263,6 +254,7 @@ fun LanMiHomeApp() {
                     action = { n -> command { it.fanAction(n) } },
                     recover = { command { it.forceRecovery() } },
                 )
+                Tab.W96D -> W96DScreen(activeBase = activeBase, primaryBase = baseUrl)
                 Tab.LAMP -> LampScreen(
                     lamp,
                     !busy,
@@ -337,7 +329,7 @@ private fun SettingsDialog(
                     style = MaterialTheme.typography.bodySmall,
                 )
                 Text(
-                    "例如 http://10.0.0.1:8765\n主路由器上的 Xiaomi/BLE/CUKTECH secrets 仍只保存在路由器；Night Node 使用自己的本地私有配置。",
+                    "W96D 使用同一主机的 :8766 sidecar；找不到 LAN 节点时可由客户端直接连接 BLE。\n例如 http://10.0.0.1:8765\n主路由器上的 Xiaomi/BLE/CUKTECH secrets 仍只保存在路由器；Night Node 使用自己的本地私有配置。",
                     style = MaterialTheme.typography.bodySmall,
                 )
             }
