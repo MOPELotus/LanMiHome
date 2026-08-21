@@ -11,8 +11,8 @@ android {
         applicationId = "dev.lotus.lanmihome.client"
         minSdk = 26
         targetSdk = 36
-        versionCode = 13
-        versionName = "1.6.2"
+        versionCode = 14
+        versionName = "1.7.0"
     }
 
     flavorDimensions += "role"
