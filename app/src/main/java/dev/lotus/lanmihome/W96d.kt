@@ -1,7 +1,6 @@
 package dev.lotus.lanmihome
 
 import android.content.Context
-import android.os.Build
 import java.net.URI
 import java.time.LocalTime
 import java.util.concurrent.TimeUnit
@@ -74,10 +73,13 @@ internal data class W96dState(
 
 private fun JSONObject.stringOrNullW96d(key: String): String? =
     if (has(key) && !isNull(key)) optString(key).takeIf(String::isNotBlank) else null
+
 private fun JSONObject.boolOrNullW96d(key: String): Boolean? =
     if (has(key) && !isNull(key)) optBoolean(key) else null
+
 private fun JSONObject.intOrNullW96d(key: String): Int? =
     if (has(key) && !isNull(key)) optInt(key) else null
+
 private fun JSONObject.longOrNullW96d(key: String): Long? =
     if (has(key) && !isNull(key)) optLong(key) else null
 
@@ -92,43 +94,57 @@ internal object W96dPrefs {
     fun environment(context: Context): W96dEnvironment {
         val raw = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
             .getString(KEY_ENV, W96dEnvironment.SCHOOL.name)
-        return runCatching { W96dEnvironment.valueOf(raw ?: "") }.getOrDefault(W96dEnvironment.SCHOOL)
+        return runCatching { W96dEnvironment.valueOf(raw ?: "") }
+            .getOrDefault(W96dEnvironment.SCHOOL)
     }
 
     fun setEnvironment(context: Context, value: W96dEnvironment) {
-        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putString(KEY_ENV, value.name).apply()
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            .edit().putString(KEY_ENV, value.name).apply()
     }
 
     fun outdoor(context: Context): Boolean =
-        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getBoolean(KEY_OUTDOOR, false)
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            .getBoolean(KEY_OUTDOOR, false)
 
     fun setOutdoor(context: Context, value: Boolean) {
-        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putBoolean(KEY_OUTDOOR, value).apply()
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            .edit().putBoolean(KEY_OUTDOOR, value).apply()
     }
 
     fun nightUrl(context: Context): String =
-        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getString(KEY_NIGHT_URL, "")?.trim().orEmpty()
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            .getString(KEY_NIGHT_URL, "")?.trim().orEmpty()
 
     fun setNightUrl(context: Context, value: String) {
-        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putString(KEY_NIGHT_URL, value.trim()).apply()
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            .edit().putString(KEY_NIGHT_URL, value.trim()).apply()
     }
 
     fun bleAddress(context: Context): String =
-        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getString(KEY_ADDRESS, "")?.trim().orEmpty()
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            .getString(KEY_ADDRESS, "")?.trim().orEmpty()
 
     fun setBleAddress(context: Context, value: String) {
-        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putString(KEY_ADDRESS, value.trim()).apply()
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            .edit().putString(KEY_ADDRESS, value.trim()).apply()
     }
 
     fun nodePaused(context: Context): Boolean =
-        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getBoolean(KEY_NODE_PAUSED, false)
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            .getBoolean(KEY_NODE_PAUSED, false)
 
     fun setNodePaused(context: Context, value: Boolean) {
-        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putBoolean(KEY_NODE_PAUSED, value).apply()
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            .edit().putBoolean(KEY_NODE_PAUSED, value).apply()
     }
 }
 
-internal fun w96dOwner(environment: W96dEnvironment, outdoor: Boolean, now: LocalTime = LocalTime.now()): W96dOwner {
+internal fun w96dOwner(
+    environment: W96dEnvironment,
+    outdoor: Boolean,
+    now: LocalTime = LocalTime.now(),
+): W96dOwner {
     if (outdoor) return W96dOwner.PHONE
     if (environment == W96dEnvironment.HOME) return W96dOwner.ROUTER
     return if (!now.isBefore(LocalTime.of(6, 0)) && now.isBefore(LocalTime.of(23, 0))) {
@@ -146,9 +162,9 @@ internal fun w96dOwnerLabel(owner: W96dOwner): String = when (owner) {
 
 internal fun routerW96dBase(primaryBase: String): String {
     val normalized = LanMiHomeApi.normalize(primaryBase)
-    val u = URI(normalized)
-    val host = u.host ?: throw IllegalArgumentException("主服务端地址缺少主机名")
-    return URI(u.scheme, null, host, 8766, "", null, null).toString().trimEnd('/')
+    val uri = URI(normalized)
+    val host = uri.host ?: throw IllegalArgumentException("主服务端地址缺少主机名")
+    return URI(uri.scheme, null, host, 8766, "", null, null).toString().trimEnd('/')
 }
 
 internal fun nightW96dBase(context: Context): String {
@@ -177,7 +193,17 @@ internal class W96dRemoteClient(rawBase: String) {
         .retryOnConnectionFailure(false)
         .build()
 
-    suspend fun state(): W96dState = W96dState.fromJson(request("GET", "/api/v1/w96d"))
+    // W96dScreen only calls state() while not in OUTDOOR. Therefore a paused
+    // designated owner means a stale OUTDOOR release, not a reason to elect a
+    // different node. Resume this exact owner and re-read it; never probe.
+    suspend fun state(): W96dState {
+        var current = W96dState.fromJson(request("GET", "/api/v1/w96d"))
+        if (current.paused) {
+            resume()
+            current = W96dState.fromJson(request("GET", "/api/v1/w96d"))
+        }
+        return current
+    }
 
     suspend fun patch(vararg pairs: Pair<String, Any>): W96dState {
         val body = JSONObject().apply { pairs.forEach { put(it.first, it.second) } }
@@ -190,23 +216,28 @@ internal class W96dRemoteClient(rawBase: String) {
     private suspend fun ownership(state: String): JSONObject =
         request("POST", "/api/v1/w96d/ownership", JSONObject().put("state", state))
 
-    private suspend fun request(method: String, path: String, body: JSONObject? = null): JSONObject =
-        withContext(Dispatchers.IO) {
-            val requestBody = (body?.toString() ?: "{}").toRequestBody(jsonType)
-            val b = Request.Builder().url(base + path).header("Accept", "application/json")
-            when (method) {
-                "GET" -> b.get()
-                "PATCH" -> b.patch(requestBody)
-                "POST" -> b.post(requestBody)
-                else -> error(method)
-            }
-            http.newCall(b.build()).execute().use { response ->
-                val text = response.body.string()
-                if (!response.isSuccessful) {
-                    val detail = runCatching { JSONObject(text).optString("error") }.getOrDefault("")
-                    throw ApiException("W96D HTTP ${response.code}${if (detail.isBlank()) "" else ": $detail"}")
-                }
-                if (text.isBlank()) JSONObject() else JSONObject(text)
-            }
+    private suspend fun request(
+        method: String,
+        path: String,
+        body: JSONObject? = null,
+    ): JSONObject = withContext(Dispatchers.IO) {
+        val requestBody = (body?.toString() ?: "{}").toRequestBody(jsonType)
+        val builder = Request.Builder().url(base + path).header("Accept", "application/json")
+        when (method) {
+            "GET" -> builder.get()
+            "PATCH" -> builder.patch(requestBody)
+            "POST" -> builder.post(requestBody)
+            else -> error(method)
         }
+        http.newCall(builder.build()).execute().use { response ->
+            val text = response.body.string()
+            if (!response.isSuccessful) {
+                val detail = runCatching { JSONObject(text).optString("error") }.getOrDefault("")
+                throw ApiException(
+                    "W96D HTTP ${response.code}${if (detail.isBlank()) "" else ": $detail"}"
+                )
+            }
+            if (text.isBlank()) JSONObject() else JSONObject(text)
+        }
+    }
 }
