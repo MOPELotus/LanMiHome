@@ -1,0 +1,17 @@
+{
+  "listen": "0.0.0.0",
+  "port": 8766,
+  "poll_seconds": 2.0,
+  "connect_timeout_seconds": 10.0,
+  "state_file": "/lotusemmc/lanmihome/w96d-owner.json",
+  "device": {
+    "enabled": true,
+    "name_prefix": "W96D",
+    "address": ""
+  },
+  "ownership": {
+    "site": "school",
+    "day_start": "06:00",
+    "night_start": "23:00"
+  }
+}
