@@ -63,15 +63,14 @@ class OwnershipPolicy:
         if site not in {"home", "school"}:
             raise ValueError("ownership.site must be home or school")
         self.site = site
+        # Retain and validate the legacy fields so existing config files remain
+        # compatible, but the Xiaomi 10S Night Owner is parked now. Both HOME
+        # and SCHOOL therefore keep the router eligible for BLE ownership 24h.
         self.day_start = _parse_hhmm(day_start)
         self.night_start = _parse_hhmm(night_start)
 
     def scheduled(self, when: datetime | None = None) -> bool:
-        if self.site == "home":
-            return True
-        now = when or datetime.now()
-        minutes = now.hour * 60 + now.minute
-        return _inside_half_open(minutes, self.day_start, self.night_start)
+        return True
 
 
 @dataclass
