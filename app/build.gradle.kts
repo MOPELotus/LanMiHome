@@ -13,20 +13,9 @@ android {
         targetSdk = 36
         versionCode = 13
         versionName = "1.6.2"
-    }
-
-    flavorDimensions += "role"
-    productFlavors {
-        create("client") {
-            dimension = "role"
-            buildConfigField("boolean", "NIGHT_NODE_ENABLED", "false")
-            manifestPlaceholders["nightNodeEnabled"] = "false"
-        }
-        create("night") {
-            dimension = "role"
-            buildConfigField("boolean", "NIGHT_NODE_ENABLED", "true")
-            manifestPlaceholders["nightNodeEnabled"] = "true"
-        }
+        // Xiaomi 10S Night Node is parked. Keep the source code compiled so it
+        // can be restored later without losing history, but expose no runtime entry.
+        buildConfigField("boolean", "NIGHT_NODE_ENABLED", "false")
     }
 
     buildFeatures {

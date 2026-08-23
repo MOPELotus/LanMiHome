@@ -1,9 +1,6 @@
 package dev.lotus.lanmihome
 
 import android.content.Context
-import android.net.ConnectivityManager
-import android.net.Network
-import android.net.NetworkCapabilities
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -12,63 +9,11 @@ import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.sync.Mutex
-import java.net.Inet4Address
 
 internal const val MAIN_PREFS = "lanmihome"
 internal const val DEFAULT_SERVER_URL = "http://10.0.0.1:8765"
 
-private enum class Tab { FAN, LAMP, SENSOR, CHARGER, W96D, NIGHT }
-private enum class BackendKind { PRIMARY, WIFI_GATEWAY, LOCAL }
-
-private data class BackendTarget(
-    val url: String,
-    val kind: BackendKind,
-    val network: Network? = null,
-)
-
-private fun gatewayServerTarget(context: Context, port: Int = 8765): BackendTarget? {
-    val cm = context.getSystemService(ConnectivityManager::class.java) ?: return null
-    val networks = cm.allNetworks.toList().sortedByDescending { it == cm.activeNetwork }
-    for (network in networks) {
-        val caps = cm.getNetworkCapabilities(network) ?: continue
-        if (!caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)) continue
-        val props = cm.getLinkProperties(network) ?: continue
-        val gateway = props.routes.asSequence()
-            .filter { it.isDefaultRoute }
-            .mapNotNull { it.gateway as? Inet4Address }
-            .firstOrNull() ?: continue
-        return BackendTarget(
-            url = "http://${gateway.hostAddress}:$port",
-            kind = BackendKind.WIFI_GATEWAY,
-            network = network,
-        )
-    }
-    return null
-}
-
-private suspend fun <T> withTargetNetwork(
-    context: Context,
-    target: BackendTarget,
-    mutex: Mutex,
-    block: suspend () -> T,
-): T {
-    mutex.lock()
-    try {
-        val network = target.network ?: return block()
-        val cm = context.getSystemService(ConnectivityManager::class.java)
-            ?: throw ApiException("无法取得 ConnectivityManager")
-        val previous = cm.boundNetworkForProcess
-        if (!cm.bindProcessToNetwork(network)) throw ApiException("无法绑定当前 Wi-Fi 网络")
-        try {
-            return block()
-        } finally {
-            cm.bindProcessToNetwork(previous)
-        }
-    } finally {
-        mutex.unlock()
-    }
-}
+private enum class Tab { FAN, LAMP, SENSOR, CHARGER, W96D }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -76,8 +21,6 @@ fun LanMiHomeApp() {
     val context = androidx.compose.ui.platform.LocalContext.current
     val prefs = remember { context.getSharedPreferences(MAIN_PREFS, Context.MODE_PRIVATE) }
     var baseUrl by remember { mutableStateOf(prefs.getString("base_url", DEFAULT_SERVER_URL) ?: DEFAULT_SERVER_URL) }
-    var activeBase by remember { mutableStateOf(baseUrl) }
-    var activeKind by remember { mutableStateOf(BackendKind.PRIMARY) }
     var tab by remember { mutableStateOf(Tab.FAN) }
     var fan by remember { mutableStateOf<FanState?>(null) }
     var lamp by remember { mutableStateOf<LampState?>(null) }
@@ -90,80 +33,46 @@ fun LanMiHomeApp() {
     var consecutiveRefreshFailures by remember { mutableIntStateOf(0) }
     val snack = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
-    val networkMutex = remember { Mutex() }
 
-    fun resolvedActiveTarget(): BackendTarget? = when (activeKind) {
-        BackendKind.PRIMARY -> BackendTarget(activeBase, BackendKind.PRIMARY)
-        BackendKind.LOCAL -> BackendTarget(activeBase, BackendKind.LOCAL)
-        BackendKind.WIFI_GATEWAY -> gatewayServerTarget(context)?.takeIf { it.url == activeBase }
+    suspend fun loadCurrentTab() {
+        val api = LanMiHomeApi(baseUrl)
+        when (tab) {
+            Tab.FAN -> fan = api.fan()
+            Tab.LAMP -> lamp = api.lamp()
+            Tab.SENSOR -> sensor = api.sensor()
+            Tab.CHARGER -> chargers = api.chargers()
+            Tab.W96D -> Unit
+        }
+        recovery = runCatching { api.recovery() }.getOrNull()
     }
 
-    fun rediscoveryTargets(): List<BackendTarget> {
-        val targets = mutableListOf<BackendTarget>()
-        val gateway = gatewayServerTarget(context)
-        if (activeKind == BackendKind.LOCAL) {
-            targets += BackendTarget(activeBase, BackendKind.LOCAL)
-        } else if (!online && gateway != null && gateway.url != baseUrl) {
-            targets += gateway
-        } else {
-            resolvedActiveTarget()?.let { targets += it }
-        }
-        targets += BackendTarget(baseUrl, BackendKind.PRIMARY)
-        gateway?.let { targets += it }
-        return targets.distinctBy { "${it.kind}:${it.url}" }
-    }
-
-    suspend fun loadCurrentTab(target: BackendTarget) {
-        withTargetNetwork(context, target, networkMutex) {
-            val api = LanMiHomeApi(target.url)
-            when (tab) {
-                Tab.FAN -> fan = api.fan()
-                Tab.LAMP -> lamp = api.lamp()
-                Tab.SENSOR -> sensor = api.sensor()
-                Tab.CHARGER -> chargers = api.chargers()
-                Tab.W96D, Tab.NIGHT -> Unit
+    suspend fun refresh(silent: Boolean = true) {
+        if (tab == Tab.W96D) return
+        try {
+            loadCurrentTab()
+            online = true
+            consecutiveRefreshFailures = 0
+        } catch (e: Exception) {
+            consecutiveRefreshFailures += 1
+            if (!silent || consecutiveRefreshFailures >= 2) {
+                online = false
+                when (tab) {
+                    Tab.FAN -> fan = FanState(false, e.message)
+                    Tab.LAMP -> lamp = LampState(false, e.message)
+                    Tab.SENSOR -> sensor = null
+                    Tab.CHARGER -> chargers = emptyList()
+                    Tab.W96D -> Unit
+                }
             }
-            recovery = runCatching { api.recovery() }.getOrNull()
+            if (!silent) snack.showSnackbar("连接失败：${e.message ?: "主服务端不可用"}")
         }
-    }
-
-    suspend fun refresh(silent: Boolean = true, rediscoverBackend: Boolean = false) {
-        if (tab == Tab.NIGHT || tab == Tab.W96D) return
-        val targets = if (rediscoverBackend) rediscoveryTargets() else listOfNotNull(resolvedActiveTarget())
-        var lastError: Exception? = null
-        for (target in targets) {
-            try {
-                loadCurrentTab(target)
-                activeBase = target.url
-                activeKind = target.kind
-                online = true
-                consecutiveRefreshFailures = 0
-                return
-            } catch (e: Exception) {
-                lastError = e
-            }
-        }
-        consecutiveRefreshFailures += 1
-        if (!silent || consecutiveRefreshFailures >= 2 || targets.isEmpty()) {
-            online = false
-            when (tab) {
-                Tab.FAN -> fan = FanState(false, lastError?.message)
-                Tab.LAMP -> lamp = LampState(false, lastError?.message)
-                Tab.SENSOR -> sensor = null
-                Tab.CHARGER -> chargers = emptyList()
-                Tab.W96D, Tab.NIGHT -> Unit
-            }
-        }
-        if (!silent) snack.showSnackbar("连接失败：${lastError?.message ?: "无可用服务端"}")
     }
 
     fun command(block: suspend (LanMiHomeApi) -> Unit) {
         scope.launch {
             busy = true
             try {
-                val target = resolvedActiveTarget()
-                    ?: throw ApiException("当前备用 Wi-Fi 已断开，请点击刷新重新发现")
-                withTargetNetwork(context, target, networkMutex) { block(LanMiHomeApi(target.url)) }
+                block(LanMiHomeApi(baseUrl))
                 refresh()
             } catch (e: Exception) {
                 snack.showSnackbar("操作失败：${e.message}")
@@ -174,7 +83,7 @@ fun LanMiHomeApp() {
     }
 
     LaunchedEffect(baseUrl, tab) {
-        if (tab == Tab.NIGHT || tab == Tab.W96D) return@LaunchedEffect
+        if (tab == Tab.W96D) return@LaunchedEffect
         while (isActive) {
             if (!busy) refresh()
             delay(if (tab == Tab.CHARGER) 3000 else 5000)
@@ -190,25 +99,22 @@ fun LanMiHomeApp() {
                         Text("LAN 米家")
                         Text(
                             when {
-                                tab == Tab.NIGHT -> "夜间节点管理"
-                                tab == Tab.W96D -> "W96D · 独立 BLE ownership"
-                                online && activeBase == baseUrl -> "主服务端已连接"
-                                online && activeKind == BackendKind.LOCAL -> "本机 Night Node · $activeBase"
-                                online -> "备用节点已连接 · $activeBase"
-                                else -> "服务端未连接"
+                                tab == Tab.W96D -> "W96D · 路由器 BLE / 本机 BLE"
+                                online -> "主服务端已连接"
+                                else -> "主服务端未连接"
                             },
                             style = MaterialTheme.typography.labelSmall,
                         )
                     }
                 },
                 actions = {
-                    if (tab != Tab.NIGHT && tab != Tab.W96D) {
+                    if (tab != Tab.W96D) {
                         TextButton(
                             enabled = !busy,
                             onClick = {
                                 scope.launch {
                                     busy = true
-                                    try { refresh(silent = false, rediscoverBackend = true) }
+                                    try { refresh(silent = false) }
                                     finally { busy = false }
                                 }
                             },
@@ -225,9 +131,6 @@ fun LanMiHomeApp() {
                 NavigationBarItem(tab == Tab.SENSOR, { tab = Tab.SENSOR }, icon = { Text("⌁") }, label = { Text("温湿度") })
                 NavigationBarItem(tab == Tab.CHARGER, { tab = Tab.CHARGER }, icon = { Text("⚡") }, label = { Text("充电头") })
                 NavigationBarItem(tab == Tab.W96D, { tab = Tab.W96D }, icon = { Text("◎") }, label = { Text("W96D") })
-                if (BuildConfig.NIGHT_NODE_ENABLED) {
-                    NavigationBarItem(tab == Tab.NIGHT, { tab = Tab.NIGHT }, icon = { Text("☾") }, label = { Text("夜间") })
-                }
             }
         },
     ) { padding ->
@@ -254,17 +157,6 @@ fun LanMiHomeApp() {
                     setTimer = { name, port, minutes -> command { it.setChargerTimer(name, port, minutes) } },
                 )
                 Tab.W96D -> W96dScreen(primaryBase = baseUrl)
-                Tab.NIGHT -> NightNodeScreen(
-                    onUseLocal = {
-                        activeBase = "http://127.0.0.1:${NightNodePrefs.read(context).port}"
-                        activeKind = BackendKind.LOCAL
-                        online = true
-                        consecutiveRefreshFailures = 0
-                        fan = null
-                        lamp = null
-                        tab = Tab.FAN
-                    }
-                )
             }
             if (busy) LinearProgressIndicator(Modifier.fillMaxWidth())
         }
@@ -275,8 +167,6 @@ fun LanMiHomeApp() {
             runCatching { LanMiHomeApi.normalize(raw) }.onSuccess { value ->
                 prefs.edit().putString("base_url", value).remove("auto_gateway_fallback").apply()
                 baseUrl = value
-                activeBase = value
-                activeKind = BackendKind.PRIMARY
                 online = false
                 consecutiveRefreshFailures = 0
                 fan = null
@@ -299,15 +189,15 @@ private fun SettingsDialog(initial: String, onDismiss: () -> Unit, onSave: (Stri
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 OutlinedTextField(value, { value = it }, label = { Text("主 LanMiHome 地址") }, singleLine = true)
                 Text(
-                    "点击右上角“刷新”会重新探测主服务端和当前 Wi-Fi 网关 :8765。主服务端离线且网关已改变时优先尝试网关；后台刷新只沿用当前已选服务端。备用节点请求会强制走 Wi-Fi。",
+                    "当前版本只使用这里配置的主服务端，不再自动切换到 Wi-Fi 网关或 10S Night Node。",
                     style = MaterialTheme.typography.bodySmall,
                 )
                 Text(
-                    "W96D 不使用这里的自动 fallback：HOME/SCHOOL/OUTDOOR 会按独立 ownership 规则选择路由器、10S 或本机蓝牙。",
+                    "W96D 在 HOME / SCHOOL 均由路由器持续持有 BLE；只有 OUTDOOR 会先释放路由器，再由本机 BluetoothGatt 接管。",
                     style = MaterialTheme.typography.bodySmall,
                 )
                 Text(
-                    "例如 http://10.0.0.1:8765\n主路由器上的 Xiaomi/BLE/CUKTECH secrets 仍只保存在路由器；Night Node 使用自己的本地私有配置。",
+                    "例如 http://10.0.0.1:8765。Xiaomi/BLE/CUKTECH secrets 继续只保存在路由器本地配置。",
                     style = MaterialTheme.typography.bodySmall,
                 )
             }

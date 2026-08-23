@@ -25,14 +25,16 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!-- Legacy Xiaomi 10S Night Node components are intentionally parked. -->
         <activity
             android:name=".HandoffActivity"
-            android:enabled="${nightNodeEnabled}"
+            android:enabled="false"
             android:excludeFromRecents="true"
             android:exported="true" />
         <service
             android:name=".NightNodeService"
-            android:enabled="${nightNodeEnabled}"
+            android:enabled="false"
             android:exported="false"
             android:foregroundServiceType="specialUse">
             <property
@@ -41,12 +43,12 @@
         </service>
         <service
             android:name=".W96dNightService"
-            android:enabled="${nightNodeEnabled}"
+            android:enabled="false"
             android:exported="false"
             android:foregroundServiceType="specialUse">
             <property
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
-                android:value="Deterministic 23:00-06:00 BLE owner for W96D fan" />
+                android:value="Dormant Xiaomi 10S W96D BLE owner" />
         </service>
     </application>
 </manifest>

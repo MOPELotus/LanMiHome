@@ -18,7 +18,6 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
@@ -48,7 +47,6 @@ internal fun W96dScreen(primaryBase: String) {
     val ble = remember { W96dGattClient(context.applicationContext) }
     var environment by remember { mutableStateOf(W96dPrefs.environment(context)) }
     var outdoor by remember { mutableStateOf(W96dPrefs.outdoor(context)) }
-    var nightUrl by remember { mutableStateOf(W96dPrefs.nightUrl(context)) }
     var state by remember { mutableStateOf<W96dState?>(null) }
     var busy by remember { mutableStateOf(false) }
     var lastError by remember { mutableStateOf<String?>(null) }
@@ -59,7 +57,7 @@ internal fun W96dScreen(primaryBase: String) {
 
     fun remote(owner: W96dOwner): W96dRemoteClient = when (owner) {
         W96dOwner.ROUTER -> W96dRemoteClient(routerW96dBase(primaryBase))
-        W96dOwner.NIGHT_NODE -> W96dRemoteClient(nightW96dBase(context))
+        W96dOwner.NIGHT_NODE -> error("10S W96D Night Node 已停用")
         W96dOwner.PHONE -> error("PHONE owner does not use HTTP")
     }
 
@@ -128,7 +126,6 @@ internal fun W96dScreen(primaryBase: String) {
             result[it] == true ||
                 context.checkSelfPermission(it) == android.content.pm.PackageManager.PERMISSION_GRANTED
         }
-        if (BuildConfig.NIGHT_NODE_ENABLED && granted) W96dNightService.start(context)
         if (granted && pendingPermissionOutdoor) {
             pendingPermissionOutdoor = false
             scope.launch { enterOutdoor(false) }
@@ -138,13 +135,13 @@ internal fun W96dScreen(primaryBase: String) {
         }
     }
 
-    fun requestBlePermissions(forOutdoor: Boolean) {
-        pendingPermissionOutdoor = forOutdoor
+    fun requestBlePermissions() {
+        pendingPermissionOutdoor = true
         permissionLauncher.launch(requiredW96dBlePermissions())
     }
 
     fun requestOutdoor() {
-        if (!hasW96dBlePermissions(context)) requestBlePermissions(true)
+        if (!hasW96dBlePermissions(context)) requestBlePermissions()
         else scope.launch { enterOutdoor(false) }
     }
 
@@ -168,7 +165,7 @@ internal fun W96dScreen(primaryBase: String) {
         }
     }
 
-    LaunchedEffect(environment, outdoor, nightUrl, primaryBase) {
+    LaunchedEffect(environment, outdoor, primaryBase) {
         while (isActive) {
             if (!busy) {
                 try {
@@ -221,8 +218,7 @@ internal fun W96dScreen(primaryBase: String) {
                     when {
                         outdoor -> "OUTDOOR · 仅 BluetoothGatt，不访问 LAN"
                         environment == W96dEnvironment.HOME -> "HOME · ROUTER 24h"
-                        owner == W96dOwner.NIGHT_NODE -> "SCHOOL · 23:00–06:00"
-                        else -> "SCHOOL · 06:00–23:00"
+                        else -> "SCHOOL · ROUTER 24h · 10S 已停用"
                     },
                     style = MaterialTheme.typography.bodySmall,
                 )
@@ -244,50 +240,19 @@ internal fun W96dScreen(primaryBase: String) {
                         },
                     ) { Text(if (environment == W96dEnvironment.SCHOOL) "✓ SCHOOL" else "SCHOOL") }
                 }
-                if (BuildConfig.NIGHT_NODE_ENABLED && !hasW96dBlePermissions(context)) {
-                    OutlinedButton(onClick = { requestBlePermissions(false) }) {
-                        Text("授权 10S W96D 蓝牙")
-                    }
-                }
                 if (!outdoor) {
                     Button(enabled = !busy, onClick = ::requestOutdoor) {
                         Text("进入外出模式 · 本机蓝牙")
                     }
                 } else {
                     Button(enabled = !busy, onClick = { scope.launch { exitOutdoor() } }) {
-                        Text("退出外出模式 · 恢复 ${environment.name}")
+                        Text("退出外出模式 · 恢复路由器")
                     }
                 }
                 Text(
-                    "节点不会互相探活抢占。OUTDOOR 会先要求当前指定 owner 释放；退出时本机先断开，再恢复按环境/时间指定的 owner。",
+                    "当前版本不再进行 23:00/06:00 节点切换。HOME 和 SCHOOL 都由路由器持续持有；OUTDOOR 先要求路由器释放，再由本机接管。",
                     style = MaterialTheme.typography.bodySmall,
                 )
-            }
-        }
-
-        if (environment == W96dEnvironment.SCHOOL && !BuildConfig.NIGHT_NODE_ENABLED) {
-            Card(Modifier.fillMaxWidth()) {
-                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("10S 夜间节点 API", style = MaterialTheme.typography.titleMedium)
-                    OutlinedTextField(
-                        value = nightUrl,
-                        onValueChange = { nightUrl = it },
-                        modifier = Modifier.fillMaxWidth(),
-                        singleLine = true,
-                        label = { Text("例如 http://192.168.43.1:8766") },
-                    )
-                    OutlinedButton(
-                        onClick = {
-                            runCatching { normalizeW96dBase(nightUrl) }
-                                .onSuccess {
-                                    W96dPrefs.setNightUrl(context, it)
-                                    nightUrl = it
-                                    lastError = null
-                                }
-                                .onFailure { lastError = it.message }
-                        },
-                    ) { Text("保存 10S 地址") }
-                }
             }
         }
 
@@ -382,11 +347,11 @@ internal fun W96dScreen(primaryBase: String) {
     if (forceOutdoorDialog) {
         AlertDialog(
             onDismissRequest = { forceOutdoorDialog = false },
-            title = { Text("指定节点未确认释放") },
+            title = { Text("路由器未确认释放") },
             text = {
                 Text(
-                    "${w96dOwnerLabel(w96dOwner(environment, false))} 不可达：${releaseFailure ?: "未知错误"}\n\n" +
-                        "为避免 BLE 竞争，只有在风扇已经离开原节点蓝牙范围时才应强制本机接管。"
+                    "路由器不可达：${releaseFailure ?: "未知错误"}\n\n" +
+                        "为避免 BLE 竞争，只有在风扇已经离开路由器蓝牙范围时才应强制本机接管。"
                 )
             },
             confirmButton = {

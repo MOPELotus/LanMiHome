@@ -10,8 +10,6 @@
     "address": ""
   },
   "ownership": {
-    "site": "school",
-    "day_start": "06:00",
-    "night_start": "23:00"
+    "site": "school"
   }
 }

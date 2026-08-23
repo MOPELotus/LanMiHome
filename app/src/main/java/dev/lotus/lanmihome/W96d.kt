@@ -2,7 +2,6 @@ package dev.lotus.lanmihome
 
 import android.content.Context
 import java.net.URI
-import java.time.LocalTime
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -112,6 +111,7 @@ internal object W96dPrefs {
             .edit().putBoolean(KEY_OUTDOOR, value).apply()
     }
 
+    // Retained only for the parked Xiaomi 10S implementation.
     fun nightUrl(context: Context): String =
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
             .getString(KEY_NIGHT_URL, "")?.trim().orEmpty()
@@ -130,6 +130,7 @@ internal object W96dPrefs {
             .edit().putString(KEY_ADDRESS, value.trim()).apply()
     }
 
+    // Retained for W96dNightService source compatibility while that service is disabled.
     fun nodePaused(context: Context): Boolean =
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
             .getBoolean(KEY_NODE_PAUSED, false)
@@ -140,23 +141,17 @@ internal object W96dPrefs {
     }
 }
 
-internal fun w96dOwner(
-    environment: W96dEnvironment,
-    outdoor: Boolean,
-    now: LocalTime = LocalTime.now(),
-): W96dOwner {
-    if (outdoor) return W96dOwner.PHONE
-    if (environment == W96dEnvironment.HOME) return W96dOwner.ROUTER
-    return if (!now.isBefore(LocalTime.of(6, 0)) && now.isBefore(LocalTime.of(23, 0))) {
-        W96dOwner.ROUTER
-    } else {
-        W96dOwner.NIGHT_NODE
-    }
+internal fun w96dOwner(environment: W96dEnvironment, outdoor: Boolean): W96dOwner {
+    // HOME and SCHOOL intentionally share the same 24h router owner now that the
+    // router remains powered overnight. Keep environment persisted for future use.
+    @Suppress("UNUSED_VARIABLE")
+    val retainedEnvironment = environment
+    return if (outdoor) W96dOwner.PHONE else W96dOwner.ROUTER
 }
 
 internal fun w96dOwnerLabel(owner: W96dOwner): String = when (owner) {
     W96dOwner.ROUTER -> "路由器"
-    W96dOwner.NIGHT_NODE -> "10S 夜间节点"
+    W96dOwner.NIGHT_NODE -> "10S 夜间节点（已停用）"
     W96dOwner.PHONE -> "本机蓝牙"
 }
 
@@ -167,10 +162,10 @@ internal fun routerW96dBase(primaryBase: String): String {
     return URI(uri.scheme, null, host, 8766, "", null, null).toString().trimEnd('/')
 }
 
+// Dormant compatibility helper for W96dNightService. Active UI never calls it.
 internal fun nightW96dBase(context: Context): String {
-    if (BuildConfig.NIGHT_NODE_ENABLED) return "http://127.0.0.1:8766"
     val value = W96dPrefs.nightUrl(context)
-    require(value.isNotBlank()) { "请先填写 10S W96D API 地址" }
+    require(value.isNotBlank()) { "10S W96D Night Node 已停用" }
     return normalizeW96dBase(value)
 }
 
@@ -193,9 +188,8 @@ internal class W96dRemoteClient(rawBase: String) {
         .retryOnConnectionFailure(false)
         .build()
 
-    // W96dScreen only calls state() while not in OUTDOOR. Therefore a paused
-    // designated owner means a stale OUTDOOR release, not a reason to elect a
-    // different node. Resume this exact owner and re-read it; never probe.
+    // A paused router means a stale OUTDOOR release. Resume this exact owner;
+    // never probe or elect another node.
     suspend fun state(): W96dState {
         var current = W96dState.fromJson(request("GET", "/api/v1/w96d"))
         if (current.paused) {
