@@ -57,9 +57,9 @@ private suspend fun <T> withTargetNetwork(
     try {
         val network = target.network ?: return block()
         val cm = context.getSystemService(ConnectivityManager::class.java)
-            ?: throw ApiException("无法取得 ConnectivityManager")
+            ?: throw ApiException("当前网络不可用")
         val previous = cm.boundNetworkForProcess
-        if (!cm.bindProcessToNetwork(network)) throw ApiException("无法绑定当前 Wi-Fi 网络")
+        if (!cm.bindProcessToNetwork(network)) throw ApiException("无法连接当前 Wi-Fi")
         try {
             return block()
         } finally {
@@ -146,7 +146,7 @@ fun LanMiHomeApp() {
                 Tab.W96D -> Unit
             }
         }
-        if (!silent) snack.showSnackbar("连接失败：${lastError?.message ?: "无可用路由器服务端"}")
+        if (!silent) snack.showSnackbar("暂时无法连接设备，请稍后重试")
     }
 
     fun command(block: suspend (LanMiHomeApi) -> Unit) {
@@ -155,13 +155,13 @@ fun LanMiHomeApp() {
             try {
                 if (!online) refresh(silent = true)
                 val target = resolvedActiveTarget()
-                    ?: throw ApiException("当前路由器服务端不可用，请点击刷新")
+                    ?: throw ApiException("设备暂时不可用")
                 withTargetNetwork(context, target, networkMutex) {
                     block(LanMiHomeApi(target.url))
                 }
                 refresh()
-            } catch (e: Exception) {
-                snack.showSnackbar("操作失败：${e.message}")
+            } catch (_: Exception) {
+                snack.showSnackbar("操作未完成，请重试")
             } finally {
                 busy = false
             }
@@ -191,10 +191,9 @@ fun LanMiHomeApp() {
                         Text("LAN 米家")
                         Text(
                             when {
-                                tab == Tab.W96D -> "W96D · 路由器 BLE / 本机 BLE"
-                                online && activeKind == BackendKind.PRIMARY -> "主服务端已连接"
-                                online -> "当前 Wi-Fi 路由器已连接 · $activeBase"
-                                else -> "服务端未连接"
+                                tab == Tab.W96D -> "W96D"
+                                online -> "设备已连接"
+                                else -> "正在连接设备…"
                             },
                             style = MaterialTheme.typography.labelSmall,
                         )
@@ -221,8 +220,8 @@ fun LanMiHomeApp() {
             NavigationBar {
                 NavigationBarItem(tab == Tab.FAN, { tab = Tab.FAN }, icon = { Text("◉") }, label = { Text("风扇") })
                 NavigationBarItem(tab == Tab.LAMP, { tab = Tab.LAMP }, icon = { Text("●") }, label = { Text("台灯") })
-                NavigationBarItem(tab == Tab.SENSOR, { tab = Tab.SENSOR }, icon = { Text("⌁") }, label = { Text("温湿度") })
-                NavigationBarItem(tab == Tab.CHARGER, { tab = Tab.CHARGER }, icon = { Text("⚡") }, label = { Text("充电头") })
+                NavigationBarItem(tab == Tab.SENSOR, { tab = Tab.SENSOR }, icon = { Text("⌁") }, label = { Text("环境") })
+                NavigationBarItem(tab == Tab.CHARGER, { tab = Tab.CHARGER }, icon = { Text("⚡") }, label = { Text("充电") })
                 NavigationBarItem(tab == Tab.W96D, { tab = Tab.W96D }, icon = { Text("◎") }, label = { Text("W96D") })
             }
         },
@@ -269,7 +268,7 @@ fun LanMiHomeApp() {
                 sensor = null
                 chargers = null
                 settings = false
-            }.onFailure { scope.launch { snack.showSnackbar(it.message ?: "地址无效") } }
+            }.onFailure { scope.launch { snack.showSnackbar("请输入正确的连接地址") } }
         }
     }
 }
@@ -279,20 +278,20 @@ private fun SettingsDialog(initial: String, onDismiss: () -> Unit, onSave: (Stri
     var value by remember(initial) { mutableStateOf(initial) }
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("服务端设置") },
+        title = { Text("连接设置") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                OutlinedTextField(value, { value = it }, label = { Text("主 LanMiHome 地址") }, singleLine = true)
+                OutlinedTextField(value, { value = it }, label = { Text("设备中枢地址") }, singleLine = true)
                 Text(
-                    "会优先使用已连接的路由器服务端；配置地址不可用时，仅尝试当前 Wi-Fi 默认网关 :8765。不会启用或探测 10S Night Node。",
+                    "通常无需修改。连接到家里或宿舍 Wi-Fi 后，App 会自动尝试当前路由器；也可以在这里填写固定地址。",
                     style = MaterialTheme.typography.bodySmall,
                 )
                 Text(
-                    "W96D 在 HOME / SCHOOL 均由路由器持续持有 BLE；只有 OUTDOOR 会先释放路由器，再由本机 BluetoothGatt 接管。",
+                    "W96D 在室内由路由器保持连接；切换到外出模式后，会改由手机直接连接。",
                     style = MaterialTheme.typography.bodySmall,
                 )
                 Text(
-                    "例如 http://10.0.0.1:8765。Xiaomi/BLE/CUKTECH secrets 继续只保存在路由器本地配置。",
+                    "地址示例：http://10.0.0.1:8765",
                     style = MaterialTheme.typography.bodySmall,
                 )
             }
