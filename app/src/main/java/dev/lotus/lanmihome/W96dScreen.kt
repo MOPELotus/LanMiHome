@@ -390,11 +390,8 @@ internal fun W96dScreen(primaryBase: String) {
                 TelemetryRow(
                     "电池",
                     voltageText(current?.batteryVoltageMv),
-                    currentText(current?.batteryCurrentMa),
+                    batteryDetailText(current?.batteryCurrentMa, current?.chargeStatus),
                 )
-                current?.chargeStatus?.let {
-                    TelemetryRow("电池状态", if (it == 1) "充电中" else "放电中", "")
-                }
                 TelemetryRow("外部供电", voltageText(current?.vbusVoltageMv), "")
                 TelemetryRow(
                     "电机",
@@ -586,6 +583,16 @@ private fun voltageText(value: Number?): String =
 private fun currentText(value: Number?): String = value?.toDouble()?.let {
     if (kotlin.math.abs(it) >= 1000) "%.2f A".format(it / 1000.0) else "${it.toInt()} mA"
 } ?: "—"
+
+private fun batteryDetailText(currentMa: Int?, chargeStatus: Int?): String =
+    listOfNotNull(
+        currentMa?.let { currentText(-it) },
+        when (chargeStatus) {
+            1 -> "充电中"
+            0 -> "放电中"
+            else -> null
+        },
+    ).joinToString(" · ")
 
 private fun capacityText(value: Long?): String =
     value?.let { "%.1f Wh".format(it / 1000.0) } ?: "—"
