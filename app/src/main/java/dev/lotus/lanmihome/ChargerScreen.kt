@@ -22,15 +22,15 @@ fun ChargerScreen(
         Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
-        Text("酷态科充电头", style = MaterialTheme.typography.headlineSmall)
+        Text("充电设备", style = MaterialTheme.typography.headlineSmall)
 
         if (chargers == null) {
             CircularProgressIndicator()
-            Text("正在读取充电头…")
+            Text("正在连接充电设备…")
             return@Column
         }
         if (chargers.isEmpty()) {
-            Text("服务端未返回已配置的充电头。")
+            Text("暂时没有可用的充电设备。")
             return@Column
         }
 
@@ -47,13 +47,13 @@ fun ChargerScreen(
                 HorizontalDivider(Modifier.padding(vertical = 6.dp))
             }
         }
-
-        Text(
-            "实时状态来自路由器上的 AD1204 BLE 长连接。页面切换（PIID 14 / goto）尚未确认真实设备语义，因此客户端暂不提供该操作。",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
     }
+}
+
+private fun chargerDisplayName(name: String): String = when (name.lowercase()) {
+    "bed" -> "床头充电头"
+    "desk" -> "桌面充电头"
+    else -> name.replaceFirstChar { if (it.isLowerCase()) it.titlecase() else it.toString() }
 }
 
 @Composable
@@ -66,25 +66,20 @@ private fun ChargerDevice(
     setTimer: (String, String, Int) -> Unit,
 ) {
     val ok = charger.available
-    val label = charger.name.replaceFirstChar { if (it.isLowerCase()) it.titlecase() else it.toString() }
-    val detail = listOfNotNull(
-        charger.address,
-        charger.firmwareVersion?.let { "FW $it" },
-        charger.miotVersion?.let { "MIoT $it" },
-    ).joinToString(" · ").takeIf { it.isNotBlank() }
+    val detail = charger.firmwareVersion?.let { "固件 $it" }
 
     DeviceHeader(
-        title = label,
+        title = chargerDisplayName(charger.name),
         detail = detail,
         available = ok,
-        error = if (ok) null else charger.status ?: "未连接或未认证",
+        error = if (ok) null else charger.status ?: "设备暂时离线",
     )
 
-    Section("实时功率 · ${"%.2f".format(charger.totalPower)} W") {
-        charger.deviceModel?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
-        charger.updatedAt?.let { Text("状态时间：$it", style = MaterialTheme.typography.bodySmall) }
+    Section("总功率 · ${"%.2f".format(charger.totalPower)} W") {
         if (charger.c3aShared) {
-            Text("C3 + A 当前处于共享输出状态", color = MaterialTheme.colorScheme.primary)
+            Text("C3 与 USB-A 正在共享输出功率", color = MaterialTheme.colorScheme.primary)
+        } else {
+            Text("各端口会根据当前负载自动分配功率", style = MaterialTheme.typography.bodySmall)
         }
     }
 
@@ -108,13 +103,13 @@ private fun ChargerDevice(
         )
     }
 
-    Section("场景模式") {
+    Section("使用模式") {
         val mode = charger.setting(5)?.toInt()
         Row(
             Modifier.horizontalScroll(rememberScrollState()),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            listOf(1 to "AI", 2 to "数码", 3 to "单口", 4 to "均衡").forEach { (value, text) ->
+            listOf(1 to "智能", 2 to "数码设备", 3 to "单口优先", 4 to "均衡").forEach { (value, text) ->
                 FilterChip(
                     selected = mode == value,
                     onClick = { patch(charger.name, arrayOf("scene_mode" to value)) },
@@ -125,9 +120,9 @@ private fun ChargerDevice(
         }
     }
 
-    Section("屏幕") {
+    Section("屏幕设置") {
         val timeout = charger.setting(6)?.toInt()
-        Text("熄屏时间", style = MaterialTheme.typography.labelLarge)
+        Text("自动熄屏", style = MaterialTheme.typography.labelLarge)
         Row(
             Modifier.horizontalScroll(rememberScrollState()),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -151,7 +146,7 @@ private fun ChargerDevice(
         HorizontalDivider()
 
         val language = charger.setting(13)?.toInt()
-        Text("语言", style = MaterialTheme.typography.labelLarge)
+        Text("显示语言", style = MaterialTheme.typography.labelLarge)
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             FilterChip(
                 selected = language == 1,
@@ -184,12 +179,12 @@ private fun ChargerDevice(
         ) { patch(charger.name, arrayOf("orientation_lock" to it)) }
     }
 
-    Section("USB-A") {
+    Section("USB-A 设置") {
         ToggleLine(
-            label = "低电流模式",
+            label = "小电流模式",
             checked = charger.setting(15) == 1L,
             enabled = ok && enabled,
-            note = "用于小电流设备；不会修改 C 口设置",
+            note = "适合耳机、手环等低功耗设备",
         ) { patch(charger.name, arrayOf("usb_a_low_current" to it)) }
     }
 }
@@ -213,23 +208,19 @@ private fun ChargerPort(
         )
 
         if (port.shared) {
-            Text("共享输出：C3 + A", color = MaterialTheme.colorScheme.primary)
-        }
-
-        port.protocolSource?.let {
-            Text("协议来源：$it${port.protocolNumber?.let { n -> " · #$n" } ?: ""}", style = MaterialTheme.typography.bodySmall)
+            Text("与另一端口共享输出功率", color = MaterialTheme.colorScheme.primary)
         }
 
         ToggleLine(
-            label = "允许端口输出",
+            label = "端口供电",
             checked = port.enabled,
             enabled = enabled,
-            note = if (port.active) "当前端口有负载；关闭会立即断电" else null,
+            note = if (port.active) "关闭后，此端口会立即停止供电" else null,
         ) { setPort(chargerName, port.key, it) }
 
         if (protocols.isNotEmpty()) {
             HorizontalDivider()
-            Text("协议开关", style = MaterialTheme.typography.labelLarge)
+            Text("快充协议", style = MaterialTheme.typography.labelLarge)
             protocols.toSortedMap().forEach { (protocol, checked) ->
                 ToggleLine(
                     label = protocol.uppercase(),
@@ -241,7 +232,7 @@ private fun ChargerPort(
 
         HorizontalDivider()
         Text(
-            if (timerMinutes > 0) "倒计时：$timerMinutes 分钟" else "倒计时：关闭",
+            if (timerMinutes > 0) "定时关闭：$timerMinutes 分钟" else "定时关闭：未开启",
             style = MaterialTheme.typography.labelLarge,
         )
         Row(
@@ -251,7 +242,7 @@ private fun ChargerPort(
             listOf(0, 30, 60, 120).forEach { minutes ->
                 AssistChip(
                     onClick = { setTimer(chargerName, port.key, minutes) },
-                    label = { Text(if (minutes == 0) "关闭" else "$minutes 分") },
+                    label = { Text(if (minutes == 0) "关闭定时" else "$minutes 分钟") },
                     enabled = enabled,
                 )
             }
