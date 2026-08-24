@@ -53,12 +53,11 @@ internal fun W96dScreen(primaryBase: String) {
     var speedDraft by remember { mutableIntStateOf(50) }
     var forceOutdoorDialog by remember { mutableStateOf(false) }
     var pendingPermissionOutdoor by remember { mutableStateOf(false) }
-    var releaseFailure by remember { mutableStateOf<String?>(null) }
 
     fun remote(owner: W96dOwner): W96dRemoteClient = when (owner) {
         W96dOwner.ROUTER -> W96dRemoteClient(routerW96dBase(primaryBase))
-        W96dOwner.NIGHT_NODE -> error("10S W96D Night Node 已停用")
-        W96dOwner.PHONE -> error("PHONE owner does not use HTTP")
+        W96dOwner.NIGHT_NODE -> error("该连接方式当前不可用")
+        W96dOwner.PHONE -> error("手机直连无需网络连接")
     }
 
     suspend fun enterOutdoor(forceWithoutRelease: Boolean = false) {
@@ -70,8 +69,7 @@ internal fun W96dScreen(primaryBase: String) {
                 try {
                     remote(previousOwner).release()
                     released = true
-                } catch (e: Exception) {
-                    releaseFailure = e.message ?: e.javaClass.simpleName
+                } catch (_: Exception) {
                     forceOutdoorDialog = true
                     return
                 }
@@ -83,17 +81,12 @@ internal fun W96dScreen(primaryBase: String) {
                 state = ble.connect()
                 speedDraft = state?.speed ?: speedDraft
                 lastError = null
-            } catch (e: Exception) {
+            } catch (_: Exception) {
                 W96dPrefs.setOutdoor(context, false)
                 outdoor = false
-                state = W96dState(owner = "phone", error = e.message)
-                lastError = "本机蓝牙接管失败：${e.message}"
-                if (released) {
-                    runCatching { remote(previousOwner).resume() }
-                        .onFailure { resumeError ->
-                            lastError += "；原 ${w96dOwnerLabel(previousOwner)} 恢复也未确认：${resumeError.message}"
-                        }
-                }
+                state = W96dState(owner = "phone")
+                lastError = "无法使用手机直连，请确认 W96D 已开启并靠近手机"
+                if (released) runCatching { remote(previousOwner).resume() }
             }
         } finally {
             busy = false
@@ -110,8 +103,8 @@ internal fun W96dScreen(primaryBase: String) {
             try {
                 remote(owner).resume()
                 lastError = null
-            } catch (e: Exception) {
-                lastError = "已退出外出模式，但 ${w96dOwnerLabel(owner)} 恢复未确认：${e.message}"
+            } catch (_: Exception) {
+                lastError = "已结束外出模式，路由器正在重新连接 W96D"
             }
             state = null
         } finally {
@@ -131,7 +124,7 @@ internal fun W96dScreen(primaryBase: String) {
             scope.launch { enterOutdoor(false) }
         } else if (!granted) {
             pendingPermissionOutdoor = false
-            lastError = "需要蓝牙扫描/连接权限才能使用 W96D"
+            lastError = "允许附近设备权限后即可使用外出模式"
         }
     }
 
@@ -150,15 +143,15 @@ internal fun W96dScreen(primaryBase: String) {
             busy = true
             try {
                 state = if (outdoor) {
-                    if (!hasW96dBlePermissions(context)) throw IllegalStateException("缺少蓝牙权限")
+                    if (!hasW96dBlePermissions(context)) throw IllegalStateException("missing permission")
                     ble.patch(key, value)
                 } else {
                     remote(w96dOwner(environment, false)).patch(key to value)
                 }
                 speedDraft = state?.speed ?: speedDraft
                 lastError = null
-            } catch (e: Exception) {
-                lastError = e.message ?: e.javaClass.simpleName
+            } catch (_: Exception) {
+                lastError = "操作未完成，请稍后重试"
             } finally {
                 busy = false
             }
@@ -171,7 +164,7 @@ internal fun W96dScreen(primaryBase: String) {
                 try {
                     val next = if (outdoor) {
                         if (!hasW96dBlePermissions(context)) {
-                            W96dState(owner = "phone", error = "缺少蓝牙权限")
+                            W96dState(owner = "phone")
                         } else {
                             ble.connect()
                         }
@@ -181,12 +174,10 @@ internal fun W96dScreen(primaryBase: String) {
                     state = next
                     next.speed?.let { speedDraft = it }
                     if (next.error == null) lastError = null
-                } catch (e: Exception) {
-                    lastError = e.message ?: e.javaClass.simpleName
+                } catch (_: Exception) {
                     state = (state ?: W96dState()).copy(
                         available = false,
                         connected = false,
-                        error = lastError,
                     )
                 }
             }
@@ -200,8 +191,12 @@ internal fun W96dScreen(primaryBase: String) {
         }
     }
 
-    val owner = w96dOwner(environment, outdoor)
     val current = state
+    val sceneLabel = when {
+        outdoor -> "外出"
+        environment == W96dEnvironment.HOME -> "家里"
+        else -> "宿舍"
+    }
 
     Column(
         modifier = Modifier
@@ -212,13 +207,13 @@ internal fun W96dScreen(primaryBase: String) {
     ) {
         Card(Modifier.fillMaxWidth()) {
             Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                Text("W96D 控制来源", style = MaterialTheme.typography.titleMedium)
-                Text("当前：${w96dOwnerLabel(owner)}", style = MaterialTheme.typography.titleLarge)
+                Text("使用场景", style = MaterialTheme.typography.titleMedium)
+                Text(sceneLabel, style = MaterialTheme.typography.titleLarge)
                 Text(
-                    when {
-                        outdoor -> "OUTDOOR · 仅 BluetoothGatt，不访问 LAN"
-                        environment == W96dEnvironment.HOME -> "HOME · ROUTER 24h"
-                        else -> "SCHOOL · ROUTER 24h · 10S 已停用"
+                    if (outdoor) {
+                        "手机会直接连接 W96D，适合离开家或宿舍后使用。"
+                    } else {
+                        "W96D 会通过当前路由器保持连接，打开 App 即可控制。"
                     },
                     style = MaterialTheme.typography.bodySmall,
                 )
@@ -230,7 +225,7 @@ internal fun W96dScreen(primaryBase: String) {
                             W96dPrefs.setEnvironment(context, environment)
                             state = null
                         },
-                    ) { Text(if (environment == W96dEnvironment.HOME) "✓ HOME" else "HOME") }
+                    ) { Text(if (environment == W96dEnvironment.HOME) "✓ 家里" else "家里") }
                     OutlinedButton(
                         enabled = !outdoor && !busy,
                         onClick = {
@@ -238,39 +233,35 @@ internal fun W96dScreen(primaryBase: String) {
                             W96dPrefs.setEnvironment(context, environment)
                             state = null
                         },
-                    ) { Text(if (environment == W96dEnvironment.SCHOOL) "✓ SCHOOL" else "SCHOOL") }
+                    ) { Text(if (environment == W96dEnvironment.SCHOOL) "✓ 宿舍" else "宿舍") }
                 }
                 if (!outdoor) {
                     Button(enabled = !busy, onClick = ::requestOutdoor) {
-                        Text("进入外出模式 · 本机蓝牙")
+                        Text("切换到外出模式")
                     }
                 } else {
                     Button(enabled = !busy, onClick = { scope.launch { exitOutdoor() } }) {
-                        Text("退出外出模式 · 恢复路由器")
+                        Text("结束外出模式")
                     }
                 }
-                Text(
-                    "当前版本不再进行 23:00/06:00 节点切换。HOME 和 SCHOOL 都由路由器持续持有；OUTDOOR 先要求路由器释放，再由本机接管。",
-                    style = MaterialTheme.typography.bodySmall,
-                )
             }
         }
 
         Card(Modifier.fillMaxWidth()) {
             Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                Text("设备状态", style = MaterialTheme.typography.titleMedium)
+                Text("连接状态", style = MaterialTheme.typography.titleMedium)
                 Text(
                     when {
-                        current?.connected == true ->
-                            "已连接${current.address?.let { " · $it" } ?: ""}"
-                        busy -> "操作中…"
-                        else -> "未连接"
-                    }
+                        current?.connected == true -> "W96D 已连接"
+                        busy -> "正在连接 W96D…"
+                        else -> "W96D 暂时离线"
+                    },
+                    style = MaterialTheme.typography.titleMedium,
                 )
-                current?.error?.let {
-                    Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+                if (current?.error != null && current.connected != true) {
+                    Text("正在自动重试，无需手动操作", style = MaterialTheme.typography.bodySmall)
                 }
-                lastError?.takeIf { it != current?.error }?.let {
+                lastError?.let {
                     Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
                 }
             }
@@ -278,7 +269,7 @@ internal fun W96dScreen(primaryBase: String) {
 
         Card(Modifier.fillMaxWidth()) {
             Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                Text("控制", style = MaterialTheme.typography.titleMedium)
+                Text("风扇控制", style = MaterialTheme.typography.titleMedium)
                 ToggleRow("电源", current?.power, !busy && current?.available == true) {
                     command("power", it)
                 }
@@ -294,49 +285,46 @@ internal fun W96dScreen(primaryBase: String) {
                 ToggleRow("自然风", current?.natural, !busy && current?.available == true) {
                     command("natural", it)
                 }
-                ToggleRow("Turbo", current?.turbo, !busy && current?.available == true) {
+                ToggleRow("Turbo 强劲模式", current?.turbo, !busy && current?.available == true) {
                     command("turbo", it)
                 }
                 ToggleRow("指示灯", current?.indicator, !busy && current?.available == true) {
                     command("indicator", it)
                 }
                 current?.turboRemainingSeconds?.takeIf { it > 0 }?.let {
-                    Text("Turbo 剩余 ${it}s", style = MaterialTheme.typography.bodySmall)
+                    Text("强劲模式剩余 ${it} 秒", style = MaterialTheme.typography.bodySmall)
                 }
-                Text(
-                    "实体四档映射保持设备原设置；此滑杆只写 FFF3，不修改 FFF7。",
-                    style = MaterialTheme.typography.bodySmall,
-                )
+                Text("风速支持 0–100% 无级调节。", style = MaterialTheme.typography.bodySmall)
             }
         }
 
         Card(Modifier.fillMaxWidth()) {
             Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("遥测", style = MaterialTheme.typography.titleMedium)
+                Text("设备状态", style = MaterialTheme.typography.titleMedium)
                 TelemetryRow("电池", voltageText(current?.batteryVoltageMv), currentText(current?.batteryCurrentMa))
-                TelemetryRow("VBUS", voltageText(current?.vbusVoltageMv), currentText(current?.vbusCurrentMa))
+                TelemetryRow("外部供电", voltageText(current?.vbusVoltageMv), currentText(current?.vbusCurrentMa))
                 TelemetryRow("电机", voltageText(current?.motorVoltageMv), currentText(current?.motorCurrentMa))
-                TelemetryRow("电池容量", current?.batteryCapacityMwh?.let { "$it mWh" } ?: "--", "")
+                TelemetryRow("电池容量", capacityText(current?.batteryCapacityMwh), "")
                 TelemetryRow(
-                    "充放电",
+                    "供电状态",
                     when (current?.chargeStatus) {
                         1 -> "充电中"
-                        0 -> "放电中"
-                        else -> "--"
+                        0 -> "电池供电"
+                        else -> "—"
                     },
                     "",
                 )
                 TelemetryRow(
                     "电机状态",
                     when (current?.motorBlocked) {
-                        true -> "阻转/异常"
+                        true -> "需要检查"
                         false -> "正常"
-                        null -> "--"
+                        null -> "—"
                     },
                     "",
                 )
                 current?.updatedAt?.let {
-                    Text("更新：$it", style = MaterialTheme.typography.labelSmall)
+                    Text("最近更新 ${displayTime(it)}", style = MaterialTheme.typography.labelSmall)
                 }
             }
         }
@@ -347,11 +335,10 @@ internal fun W96dScreen(primaryBase: String) {
     if (forceOutdoorDialog) {
         AlertDialog(
             onDismissRequest = { forceOutdoorDialog = false },
-            title = { Text("路由器未确认释放") },
+            title = { Text("无法切换到外出模式") },
             text = {
                 Text(
-                    "路由器不可达：${releaseFailure ?: "未知错误"}\n\n" +
-                        "为避免 BLE 竞争，只有在风扇已经离开路由器蓝牙范围时才应强制本机接管。"
+                    "暂时无法通知室内路由器释放 W96D。若你已经离开家或宿舍，可以继续尝试手机直连；仍在室内时建议取消。"
                 )
             },
             confirmButton = {
@@ -360,7 +347,7 @@ internal fun W96dScreen(primaryBase: String) {
                         forceOutdoorDialog = false
                         scope.launch { enterOutdoor(true) }
                     },
-                ) { Text("已离开范围，继续") }
+                ) { Text("继续手机直连") }
             },
             dismissButton = {
                 TextButton(onClick = { forceOutdoorDialog = false }) { Text("取消") }
@@ -383,7 +370,7 @@ private fun ToggleRow(
     ) {
         Column {
             Text(label)
-            if (value == null) Text("未读取", style = MaterialTheme.typography.labelSmall)
+            if (value == null) Text("等待同步", style = MaterialTheme.typography.labelSmall)
         }
         Switch(checked = value == true, onCheckedChange = onChange, enabled = enabled)
     }
@@ -402,8 +389,14 @@ private fun TelemetryRow(label: String, left: String, right: String) {
 }
 
 private fun voltageText(value: Number?): String =
-    value?.toDouble()?.let { "%.2f V".format(it / 1000.0) } ?: "--"
+    value?.toDouble()?.let { "%.2f V".format(it / 1000.0) } ?: "—"
 
 private fun currentText(value: Number?): String = value?.toDouble()?.let {
     if (kotlin.math.abs(it) >= 1000) "%.2f A".format(it / 1000.0) else "${it.toInt()} mA"
-} ?: "--"
+} ?: "—"
+
+private fun capacityText(value: Long?): String =
+    value?.let { "%.1f Wh".format(it / 1000.0) } ?: "—"
+
+private fun displayTime(value: String): String =
+    value.substringAfter('T', value).take(8).ifBlank { value }
