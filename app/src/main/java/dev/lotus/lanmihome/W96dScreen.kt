@@ -6,6 +6,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -259,7 +260,10 @@ internal fun W96dScreen(primaryBase: String) {
                     },
                     style = MaterialTheme.typography.bodySmall,
                 )
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
                     OutlinedButton(
                         enabled = !outdoor && !busy,
                         onClick = {
@@ -368,7 +372,10 @@ internal fun W96dScreen(primaryBase: String) {
                     } ?: "当前未设置定时",
                     style = MaterialTheme.typography.bodyMedium,
                 )
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
                     OutlinedButton(
                         enabled = controlsEnabled,
                         onClick = { command("timer_seconds", 1800) },
@@ -377,8 +384,6 @@ internal fun W96dScreen(primaryBase: String) {
                         enabled = controlsEnabled,
                         onClick = { command("timer_seconds", 3600) },
                     ) { Text("1 小时") }
-                }
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     OutlinedButton(
                         enabled = controlsEnabled,
                         onClick = { command("timer_seconds", 14_400) },
@@ -437,7 +442,10 @@ internal fun W96dScreen(primaryBase: String) {
                     "用于匹配机内安装的 21700 电芯额定容量。",
                     style = MaterialTheme.typography.bodySmall,
                 )
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
                     OutlinedButton(
                         enabled = controlsEnabled,
                         onClick = { command("battery_profile", 4800) },
@@ -466,23 +474,29 @@ internal fun W96dScreen(primaryBase: String) {
                     sleepDelayText(current?.sleepDelaySeconds),
                     style = MaterialTheme.typography.bodySmall,
                 )
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
                     OutlinedButton(
-                        modifier = Modifier.weight(1f),
                         enabled = controlsEnabled,
                         onClick = { command("sleep_delay_seconds", 0) },
                     ) {
-                        Text(if (current?.sleepDelaySeconds == 0) "✓ 保持连接" else "保持连接")
+                        Text(
+                            if (current?.sleepDelaySeconds == 0) "✓ 保持连接" else "保持连接",
+                            maxLines = 1,
+                        )
                     }
                     OutlinedButton(
-                        modifier = Modifier.weight(1f),
                         enabled = controlsEnabled,
                         onClick = { command("sleep_delay_seconds", 300) },
                     ) {
-                        Text(if (current?.sleepDelaySeconds == 300) "✓ 默认 5 分钟" else "默认 5 分钟")
+                        Text(
+                            if (current?.sleepDelaySeconds == 300) "✓ 默认 5 分钟" else "默认 5 分钟",
+                            maxLines = 1,
+                        )
                     }
                     OutlinedButton(
-                        modifier = Modifier.weight(1f),
                         enabled = controlsEnabled,
                         onClick = {
                             val seed = current?.sleepDelaySeconds
@@ -497,7 +511,7 @@ internal fun W96dScreen(primaryBase: String) {
                         val customSelected = current?.sleepDelaySeconds
                             ?.let { it != 0 && it != 300 }
                             ?: false
-                        Text(if (customSelected) "✓ 自定义" else "自定义")
+                        Text(if (customSelected) "✓ 自定义" else "自定义", maxLines = 1)
                     }
                 }
 
@@ -507,7 +521,10 @@ internal fun W96dScreen(primaryBase: String) {
                     turboTimeText(current?.turboTimeSeconds),
                     style = MaterialTheme.typography.bodySmall,
                 )
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
                     OutlinedButton(
                         enabled = controlsEnabled,
                         onClick = { command("turbo_time_seconds", 0) },
@@ -516,8 +533,6 @@ internal fun W96dScreen(primaryBase: String) {
                         enabled = controlsEnabled,
                         onClick = { command("turbo_time_seconds", 60) },
                     ) { Text("60 秒") }
-                }
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     OutlinedButton(
                         enabled = controlsEnabled,
                         onClick = { command("turbo_time_seconds", 300) },
