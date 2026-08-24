@@ -575,9 +575,12 @@ async def _coordinated_patch(self, body):
                 optimistic["error"] = None
                 self._update_state(**optimistic)
 
+            # A command is successful once all requested GATT writes above succeed.
+            # W96D can briefly drop the GATT session after a mode change, so an
+            # immediate verification read must not turn an accepted command into
+            # HTTP 503. The normal polling loop refreshes/reconnects shortly after.
             self._coord_force_telemetry = True
-            await asyncio.sleep(0.08)
-            return await self._refresh_unlocked()
+            return self.snapshot()
         finally:
             await _safe_release(token, "w96d-command")
 
