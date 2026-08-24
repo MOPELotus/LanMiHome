@@ -184,6 +184,16 @@ async def _dfu_request(self, payload: bytes) -> bytes:
 
 
 async def _load_device_info(self) -> None:
+    client = self._client
+    if client is None or not client.is_connected:
+        return
+    services = getattr(client, "services", None)
+    try:
+        if services is None or services.get_service(core.SERVICE_DFU) is None:
+            return
+    except Exception:
+        return
+
     serial = None
     firmware = None
     try:
@@ -229,6 +239,7 @@ async def _coordinated_connect(self) -> None:
         self._coord_read_warn_at = {}
         self._coord_force_telemetry = False
         self._coord_force_settings = False
+        self._coord_device_info_attempted = False
         self._update_state(
             connected=True,
             available=True,
@@ -236,7 +247,6 @@ async def _coordinated_connect(self) -> None:
             error=None,
         )
         LOG.info("connected W96D at %s", address)
-        await _load_device_info(self)
     finally:
         await _safe_release(token, "w96d-connect")
 
@@ -280,6 +290,12 @@ async def _low_pressure_refresh_unlocked(self):
     initial = snapshot.get("updated_at") is None
     force_telemetry = bool(getattr(self, "_coord_force_telemetry", False))
     force_settings = bool(getattr(self, "_coord_force_settings", False))
+
+    # The connection gate only pauses advertisements long enough to establish GATT.
+    # Device-info requests are one-shot and run here, after scanning has resumed.
+    if not bool(getattr(self, "_coord_device_info_attempted", False)):
+        self._coord_device_info_attempted = True
+        await _load_device_info(self)
 
     updates: dict[str, object] = {
         "connected": True,
