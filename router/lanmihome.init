@@ -5,7 +5,7 @@ START=96
 STOP=10
 
 SERVICE_DIR=/lotusemmc/lanmihome
-SERVICE_PY="$SERVICE_DIR/lanmihome.py"
+SERVICE_PY="$SERVICE_DIR/lanmihome_coordinated.py"
 SUPERVISOR_PY="$SERVICE_DIR/recovery_supervisor.py"
 SERVICE_CONFIG="$SERVICE_DIR/config.json"
 SERVICE_PYTHONPATH="/lotusemmc/miot/python:$SERVICE_DIR"

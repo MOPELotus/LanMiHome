@@ -26,8 +26,17 @@ wget -q -T 30 -O "$TMP/repo.tar.gz" "https://codeload.github.com/$REPO/tar.gz/re
 tar -xzf "$TMP/repo.tar.gz" -C "$TMP"
 SRC="$TMP/LanMiHome-$BRANCH"
 
+for required in \
+    "$SRC/router/w96d_sidecar.py" \
+    "$SRC/router/w96d_coordinated.py" \
+    "$SRC/router/w96d.config.example.json" \
+    "$SRC/router/lanmihome-w96d.init"; do
+    [ -f "$required" ] || { echo "archive is missing required file: $required" >&2; exit 1; }
+done
+
 cp "$SRC/router/w96d_sidecar.py" "$BASE/w96d_sidecar.py"
-chmod 0755 "$BASE/w96d_sidecar.py"
+cp "$SRC/router/w96d_coordinated.py" "$BASE/w96d_coordinated.py"
+chmod 0755 "$BASE/w96d_sidecar.py" "$BASE/w96d_coordinated.py"
 if [ ! -f "$BASE/w96d.json" ]; then
     cp "$SRC/router/w96d.config.example.json" "$BASE/w96d.json"
 fi
@@ -35,12 +44,14 @@ chmod 0600 "$BASE/w96d.json"
 cp "$SRC/router/lanmihome-w96d.init" /etc/init.d/lanmihome-w96d
 chmod 0755 /etc/init.d/lanmihome-w96d
 
-/usr/bin/python3 "$BASE/w96d_sidecar.py" --config "$BASE/w96d.json" --check-config
+/usr/bin/python3 "$BASE/w96d_coordinated.py" --config "$BASE/w96d.json" --check-config
 /etc/init.d/lanmihome-w96d enable
 /etc/init.d/lanmihome-w96d restart
 sleep 1
 
 echo "W96D sidecar installed."
-echo "  config : $BASE/w96d.json"
-echo "  status : wget -qO- http://127.0.0.1:8766/api/v1/w96d"
-echo "  logs   : logread -e lanmihome.w96d -e w96d"
+echo "  coordinator : $BASE/w96d_coordinated.py"
+echo "  core        : $BASE/w96d_sidecar.py"
+echo "  config      : $BASE/w96d.json (preserved)"
+echo "  status      : wget -qO- http://127.0.0.1:8766/api/v1/w96d"
+echo "  logs        : logread -e lanmihome.w96d -e w96d -e btcoord"

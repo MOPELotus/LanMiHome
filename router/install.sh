@@ -54,6 +54,7 @@ SRC="$TMP/LanMiHome-$BRANCH"
 
 for required in \
     "$SRC/router/lanmihome.py" \
+    "$SRC/router/lanmihome_coordinated.py" \
     "$SRC/router/recovery_supervisor.py" \
     "$SRC/router/lanmihome.init" \
     "$SRC/router/config.example.json" \
@@ -64,11 +65,11 @@ for required in \
     fi
 done
 
-# Stop and disable every previous init script that launches this exact backend
-# path. This catches old service names without guessing what the user called it.
+# Stop and disable every previous init script that launches this backend.
+# Match both the legacy direct entry point and the coordinated launcher.
 for svc in /etc/init.d/*; do
     [ -f "$svc" ] || continue
-    if grep -q '/lotusemmc/lanmihome/lanmihome.py' "$svc" 2>/dev/null; then
+    if grep -q '/lotusemmc/lanmihome/lanmihome' "$svc" 2>/dev/null; then
         name="$(basename "$svc")"
         echo "Stopping previous service: $name"
         "$svc" stop 2>/dev/null || true
@@ -78,16 +79,17 @@ for svc in /etc/init.d/*; do
 done
 
 # Back up the old backend and local configuration without printing any secret.
-for file in lanmihome.py recovery_supervisor.py config.json config.example.json; do
+for file in lanmihome.py lanmihome_coordinated.py recovery_supervisor.py config.json config.example.json; do
     [ -f "$BASE/$file" ] && cp -p "$BASE/$file" "$BACKUP/$file"
 done
 
 cp "$SRC/router/lanmihome.py" "$BASE/lanmihome.py"
+cp "$SRC/router/lanmihome_coordinated.py" "$BASE/lanmihome_coordinated.py"
 cp "$SRC/router/recovery_supervisor.py" "$BASE/recovery_supervisor.py"
 cp "$SRC/router/config.example.json" "$BASE/config.example.json"
 rm -rf "$BASE/lanmihome_cuktech"
 cp -a "$SRC/tools/cuktech_ble_probe/src/lanmihome_cuktech" "$BASE/lanmihome_cuktech"
-chmod 0755 "$BASE/lanmihome.py" "$BASE/recovery_supervisor.py"
+chmod 0755 "$BASE/lanmihome.py" "$BASE/lanmihome_coordinated.py" "$BASE/recovery_supervisor.py"
 
 if [ ! -f "$BASE/config.json" ]; then
     cp "$BASE/config.example.json" "$BASE/config.json"
@@ -100,7 +102,7 @@ chmod 0755 /etc/init.d/lanmihome
 
 # Parse/import everything before replacing the live service. This does not print
 # Xiaomi tokens, BLE bind keys or CUKTECH tokens.
-PYTHONPATH="$PYTHONPATH_VALUE" /usr/bin/python3 "$BASE/lanmihome.py" \
+PYTHONPATH="$PYTHONPATH_VALUE" /usr/bin/python3 "$BASE/lanmihome_coordinated.py" \
     --config "$BASE/config.json" --check-config
 /usr/bin/python3 -m py_compile "$BASE/recovery_supervisor.py"
 
@@ -110,10 +112,11 @@ sleep 2
 
 echo
 echo "LanMiHome router backend installed."
-echo "  service   : /etc/init.d/lanmihome"
-echo "  backend   : $BASE/lanmihome.py"
-echo "  recovery  : $BASE/recovery_supervisor.py"
-echo "  config    : $BASE/config.json (preserved, mode 0600)"
-echo "  backup    : $BACKUP"
-echo "  logs      : logread -e lanmihome -e recovery-supervisor -e cuktech"
-echo "  health    : wget -qO- http://127.0.0.1:8765/api/v1/health"
+echo "  service     : /etc/init.d/lanmihome"
+echo "  coordinator : $BASE/lanmihome_coordinated.py"
+echo "  backend     : $BASE/lanmihome.py"
+echo "  recovery    : $BASE/recovery_supervisor.py"
+echo "  config      : $BASE/config.json (preserved, mode 0600)"
+echo "  backup      : $BACKUP"
+echo "  logs        : logread -e lanmihome -e recovery-supervisor -e cuktech -e btcoord"
+echo "  health      : wget -qO- http://127.0.0.1:8765/api/v1/health"
