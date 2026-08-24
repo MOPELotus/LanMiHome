@@ -111,7 +111,6 @@ internal object W96dPrefs {
             .edit().putBoolean(KEY_OUTDOOR, value).apply()
     }
 
-    // Retained only for the parked Xiaomi 10S implementation.
     fun nightUrl(context: Context): String =
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
             .getString(KEY_NIGHT_URL, "")?.trim().orEmpty()
@@ -130,7 +129,6 @@ internal object W96dPrefs {
             .edit().putString(KEY_ADDRESS, value.trim()).apply()
     }
 
-    // Retained for W96dNightService source compatibility while that service is disabled.
     fun nodePaused(context: Context): Boolean =
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
             .getBoolean(KEY_NODE_PAUSED, false)
@@ -142,37 +140,34 @@ internal object W96dPrefs {
 }
 
 internal fun w96dOwner(environment: W96dEnvironment, outdoor: Boolean): W96dOwner {
-    // HOME and SCHOOL intentionally share the same 24h router owner now that the
-    // router remains powered overnight. Keep environment persisted for future use.
     @Suppress("UNUSED_VARIABLE")
     val retainedEnvironment = environment
     return if (outdoor) W96dOwner.PHONE else W96dOwner.ROUTER
 }
 
 internal fun w96dOwnerLabel(owner: W96dOwner): String = when (owner) {
-    W96dOwner.ROUTER -> "路由器"
-    W96dOwner.NIGHT_NODE -> "10S 夜间节点（已停用）"
-    W96dOwner.PHONE -> "本机蓝牙"
+    W96dOwner.ROUTER -> "室内连接"
+    W96dOwner.NIGHT_NODE -> "备用连接"
+    W96dOwner.PHONE -> "手机直连"
 }
 
 internal fun routerW96dBase(primaryBase: String): String {
     val normalized = LanMiHomeApi.normalize(primaryBase)
     val uri = URI(normalized)
-    val host = uri.host ?: throw IllegalArgumentException("主服务端地址缺少主机名")
+    val host = uri.host ?: throw IllegalArgumentException("连接地址无效")
     return URI(uri.scheme, null, host, 8766, "", null, null).toString().trimEnd('/')
 }
 
-// Dormant compatibility helper for W96dNightService. Active UI never calls it.
 internal fun nightW96dBase(context: Context): String {
     val value = W96dPrefs.nightUrl(context)
-    require(value.isNotBlank()) { "10S W96D Night Node 已停用" }
+    require(value.isNotBlank()) { "备用连接当前不可用" }
     return normalizeW96dBase(value)
 }
 
 internal fun normalizeW96dBase(raw: String): String {
     val value = raw.trim().trimEnd('/')
     require(value.startsWith("http://") || value.startsWith("https://")) {
-        "W96D API 地址必须以 http:// 或 https:// 开头"
+        "连接地址格式不正确"
     }
     return value
 }
@@ -188,8 +183,6 @@ internal class W96dRemoteClient(rawBase: String) {
         .retryOnConnectionFailure(false)
         .build()
 
-    // A paused router means a stale OUTDOOR release. Resume this exact owner;
-    // never probe or elect another node.
     suspend fun state(): W96dState {
         var current = W96dState.fromJson(request("GET", "/api/v1/w96d"))
         if (current.paused) {
@@ -226,10 +219,7 @@ internal class W96dRemoteClient(rawBase: String) {
         http.newCall(builder.build()).execute().use { response ->
             val text = response.body.string()
             if (!response.isSuccessful) {
-                val detail = runCatching { JSONObject(text).optString("error") }.getOrDefault("")
-                throw ApiException(
-                    "W96D HTTP ${response.code}${if (detail.isBlank()) "" else ": $detail"}"
-                )
+                throw ApiException("设备暂时无法连接")
             }
             if (text.isBlank()) JSONObject() else JSONObject(text)
         }
