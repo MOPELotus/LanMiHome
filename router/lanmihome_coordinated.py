@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import secrets
+import time
 
 import lanmihome as core
 from lanmihome_cuktech.controller import CuktechController
@@ -13,6 +14,7 @@ _ACTIVE_BLE_RUNTIME = None
 
 _ORIG_BLE_INIT = core.BleRuntime.__init__
 _ORIG_BLE_THREAD_MAIN = core.BleRuntime._thread_main
+_ORIG_BLE_ON_DETECT = core.BleRuntime._on_detect
 _ORIG_ROUTE = core.Handler._route
 _ORIG_CUKTECH_CONNECT = CuktechController.connect
 _ORIG_CUKTECH_AUTHENTICATE = CuktechController.authenticate
@@ -29,6 +31,7 @@ def _patched_ble_init(self, *args, **kwargs):
     self._gatt_external_restart_scan = False
     self._gatt_external_watchdog = None
     self._gatt_scan_paused = False
+    self._btcoord_seen = {}
 
 
 def _patched_ble_thread_main(self):
@@ -39,6 +42,21 @@ def _patched_ble_thread_main(self):
     finally:
         if _ACTIVE_BLE_RUNTIME is self:
             _ACTIVE_BLE_RUNTIME = None
+
+
+def _patched_ble_on_detect(self, device, advertisement_data) -> None:
+    _ORIG_BLE_ON_DETECT(self, device, advertisement_data)
+    address = core._normalize_mac(getattr(device, "address", ""))
+    if address:
+        self._btcoord_seen[address] = time.monotonic()
+
+
+def _seen_recently(runtime, address: str, max_age: float = 15.0) -> bool:
+    key = core._normalize_mac(address)
+    if not key:
+        return False
+    seen = runtime._btcoord_seen.get(key)
+    return seen is not None and time.monotonic() - seen <= max_age
 
 
 def _gate(runtime):
@@ -103,6 +121,15 @@ async def _patched_cuktech_connect(self):
     runtime = _ACTIVE_BLE_RUNTIME
     if runtime is None or runtime.loop is None or not runtime.loop.is_running():
         return await _ORIG_CUKTECH_CONNECT(self)
+
+    # The temperature receiver is already continuously observing advertisements.
+    # Use that passive observation as a presence hint before disturbing the
+    # shared adapter. An offline fixed-MAC charger must not create a 10-second
+    # scan blackout on every reconnect attempt.
+    if not _seen_recently(runtime, self.address):
+        raise ConnectionError(
+            f"{self.name}: fixed MAC {core._normalize_mac(self.address)} not advertised recently; defer GATT setup"
+        )
 
     owner = f"cuktech:{self.name}"
     lock = _gate(runtime)
@@ -330,6 +357,7 @@ def _patched_route(self, method: str, path: str, body: dict):
 
 core.BleRuntime.__init__ = _patched_ble_init
 core.BleRuntime._thread_main = _patched_ble_thread_main
+core.BleRuntime._on_detect = _patched_ble_on_detect
 core.BleRuntime.gatt_acquire_external = _acquire_external_sync
 core.BleRuntime.gatt_release_external = _release_external_sync
 core.BleRuntime.gatt_status = _gatt_status
