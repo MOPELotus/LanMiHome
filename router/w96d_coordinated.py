@@ -82,8 +82,6 @@ async def _safe_release(token: str, owner: str) -> None:
     try:
         await _release_gate(token)
     except Exception as exc:
-        # The main service has a lease watchdog, so a failed release cannot
-        # leave advertisement scanning or the global GATT gate stuck forever.
         LOG.warning(
             "failed to release BLE gate for %s: %s: %s",
             owner,
@@ -102,9 +100,6 @@ async def _coordinated_connect(self) -> None:
         ttl=45.0,
     )
     try:
-        # Fixed-address deployments normally skip discovery entirely. If the
-        # address is empty, discovery is still safe here because the main
-        # advertisement receiver has already been paused by the coordinator.
         address = await self._discover_address()
         client = core.BleakClient(address, timeout=self.connect_timeout)
         await client.connect()
@@ -112,6 +107,7 @@ async def _coordinated_connect(self) -> None:
         self._coord_refresh_cycle = 0
         self._coord_failed_refreshes = 0
         self._coord_read_warn_at = {}
+        self._coord_force_telemetry = False
         self._update_state(
             connected=True,
             available=True,
@@ -156,14 +152,11 @@ async def _read_optional(self, label: str, uuid: str) -> bytes | None:
 
 
 async def _low_pressure_refresh_unlocked(self):
-    # The fan's BLE stack is much less tolerant of bursty reads than the
-    # charger protocol. Keep the control plane responsive, but sample the
-    # slow telemetry at a lower rate and never tear the link down because one
-    # optional characteristic returns ATT 0x0e.
     cycle = int(getattr(self, "_coord_refresh_cycle", 0)) + 1
     self._coord_refresh_cycle = cycle
     snapshot = self.snapshot()
     initial = snapshot.get("updated_at") is None
+    force_telemetry = bool(getattr(self, "_coord_force_telemetry", False))
 
     updates: dict[str, object] = {
         "connected": True,
@@ -186,8 +179,6 @@ async def _low_pressure_refresh_unlocked(self):
         updates["natural"] = bool(natural[0])
         successful += 1
 
-    # Light and turbo state change much less often than speed. Refresh them
-    # roughly every 6 seconds, plus once on the first successful snapshot.
     if initial or cycle % 3 == 1:
         light = await _read_optional(self, "FFFA/indicator", core.CHAR_LIGHT)
         if light:
@@ -205,10 +196,15 @@ async def _low_pressure_refresh_unlocked(self):
             updates["turbo_remaining_seconds"] = remain
             successful += 1
 
-    # Battery/VBUS/motor telemetry is informational, not control-critical.
-    # Sample it roughly every 10 seconds instead of hammering all three every
-    # two seconds.
-    if initial or cycle % 5 == 1:
+    # Differential captures verified these telemetry layouts:
+    # FFD1 [0:2] battery mV, [2:4] signed battery mA, [4:8] capacity mWh.
+    # FFD2 [0:4] VBUS mV. The remaining bytes are not assigned a meaning yet.
+    # FFD3 [0:2] motor mA, [4:6] motor mV. [2:4] remains unknown.
+    # Keep slow telemetry at ~10 s normally, but force one sample immediately
+    # after a control command so the UI never presents an old motor reading as fresh.
+    if initial or force_telemetry or cycle % 5 == 1:
+        self._coord_force_telemetry = False
+
         battery = await _read_optional(self, "FFD1/battery", core.CHAR_BATTERY)
         if battery is not None and len(battery) >= 8:
             voltage, current, capacity = struct.unpack(">HhI", battery[:8])
@@ -224,26 +220,15 @@ async def _low_pressure_refresh_unlocked(self):
             "FFD2/vbus",
             core.CHAR_POWER_STATUS,
         )
-        if power_status is not None and len(power_status) >= 8:
-            vbus_voltage = int.from_bytes(power_status[0:4], "big")
-            vbus_current = int.from_bytes(power_status[4:6], "big", signed=True)
-            if vbus_current == 0x7FFF:
-                vbus_current = 0
-            updates.update(
-                vbus_voltage_mv=vbus_voltage,
-                vbus_current_ma=vbus_current,
-                charge_status=power_status[7],
-            )
+        if power_status is not None and len(power_status) >= 4:
+            updates["vbus_voltage_mv"] = int.from_bytes(power_status[0:4], "big")
             successful += 1
 
         motor = await _read_optional(self, "FFD3/motor", core.CHAR_MOTOR)
-        if motor is not None and len(motor) >= 3:
-            current = int.from_bytes(motor[0:2], "big")
-            voltage = int.from_bytes(motor[-2:], "big")
+        if motor is not None and len(motor) >= 6:
             updates.update(
-                motor_current_ma=current,
-                motor_voltage_mv=voltage,
-                motor_blocked=bool(motor[2]),
+                motor_current_ma=int.from_bytes(motor[0:2], "big"),
+                motor_voltage_mv=int.from_bytes(motor[4:6], "big"),
             )
             successful += 1
 
@@ -259,9 +244,6 @@ async def _low_pressure_refresh_unlocked(self):
     if not self._connected():
         raise RuntimeError("W96D disconnected during refresh")
 
-    # A single bad ATT transaction must not create a reconnect storm. Give the
-    # peripheral a couple of quiet polling intervals before declaring the whole
-    # GATT session unhealthy.
     self._update_state(
         connected=True,
         available=True,
@@ -275,9 +257,6 @@ async def _low_pressure_refresh_unlocked(self):
 async def _coordinated_refresh_locked(self):
     assert self._op_lock is not None
     async with self._op_lock:
-        # Normal I/O keeps the temperature advertisement scanner running, but
-        # owns the same global gate so a charger cannot begin a new GATT setup
-        # in the middle of the current W96D transaction group.
         token = await _acquire_gate(
             "w96d-io",
             pause_scan=False,
@@ -297,9 +276,6 @@ async def _coordinated_patch(self, body):
 
     assert self._op_lock is not None
     async with self._op_lock:
-        # If disconnected, _ensure_owned() performs the connection using the
-        # exclusive connect gate. Once connected, acquire the normal-I/O gate;
-        # if another device setup won the race, we simply wait with W96D idle.
         await self._ensure_owned()
         token = await _acquire_gate(
             "w96d-command",
@@ -360,6 +336,7 @@ async def _coordinated_patch(self, body):
                 optimistic["error"] = None
                 self._update_state(**optimistic)
 
+            self._coord_force_telemetry = True
             await asyncio.sleep(0.08)
             return await self._refresh_unlocked()
         finally:
