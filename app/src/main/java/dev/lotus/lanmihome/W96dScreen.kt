@@ -302,27 +302,9 @@ internal fun W96dScreen(primaryBase: String) {
             Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text("设备状态", style = MaterialTheme.typography.titleMedium)
                 TelemetryRow("电池", voltageText(current?.batteryVoltageMv), currentText(current?.batteryCurrentMa))
-                TelemetryRow("外部供电", voltageText(current?.vbusVoltageMv), currentText(current?.vbusCurrentMa))
+                TelemetryRow("外部供电", voltageText(current?.vbusVoltageMv), "")
                 TelemetryRow("电机", voltageText(current?.motorVoltageMv), currentText(current?.motorCurrentMa))
                 TelemetryRow("电池容量", capacityText(current?.batteryCapacityMwh), "")
-                TelemetryRow(
-                    "供电状态",
-                    when (current?.chargeStatus) {
-                        1 -> "充电中"
-                        0 -> "电池供电"
-                        else -> "—"
-                    },
-                    "",
-                )
-                TelemetryRow(
-                    "电机状态",
-                    when (current?.motorBlocked) {
-                        true -> "需要检查"
-                        false -> "正常"
-                        null -> "—"
-                    },
-                    "",
-                )
                 current?.updatedAt?.let {
                     Text("最近更新 ${displayTime(it)}", style = MaterialTheme.typography.labelSmall)
                 }
