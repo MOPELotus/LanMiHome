@@ -153,7 +153,7 @@ internal object W96dPrefs {
     }
 
     fun lastSpeed(context: Context): Int =
-        prefs(context).getInt(KEY_LAST_SPEED, 50).coerceIn(1, 100)
+        prefs(context).getInt(KEY_LAST_SPEED, 10).coerceIn(1, 100)
 
     fun setLastSpeed(context: Context, value: Int) {
         if (value in 1..100) prefs(context).edit().putInt(KEY_LAST_SPEED, value).apply()
