@@ -90,6 +90,126 @@ async def _safe_release(token: str, owner: str) -> None:
         )
 
 
+def _crc8_table_value(value: int) -> int:
+    crc = value & 0xFF
+    for _ in range(8):
+        crc = ((crc << 1) ^ 0x3B) & 0xFF if crc & 0x80 else (crc << 1) & 0xFF
+    return crc
+
+
+def _crc8_step(crc: int, value: int) -> int:
+    return _crc8_table_value((crc ^ value) & 0xFF)
+
+
+def _dfu_pack(payload: bytes) -> bytes:
+    frame = bytearray(5 + len(payload))
+    frame[0] = 0x55
+    frame[1] = 0
+    frame[2] = len(payload) & 0xFF
+    frame[3] = (len(payload) >> 8) & 0xFF
+    frame[4 : 4 + len(payload)] = payload
+    crc = 137
+    for value in frame[: 4 + len(payload)]:
+        crc = _crc8_step(crc, value)
+    frame[-1] = crc
+    return bytes(frame)
+
+
+async def _dfu_request(self, payload: bytes) -> bytes:
+    client = self._client
+    if client is None or not client.is_connected:
+        raise RuntimeError("W96D disconnected before device-info request")
+
+    loop = asyncio.get_running_loop()
+    result: asyncio.Future[bytes] = loop.create_future()
+    stage = 0
+    key = 0
+    mask = 0
+    length = 0
+    rx_payload = bytearray()
+    crc = 137
+
+    def on_notify(_sender, data: bytearray) -> None:
+        nonlocal stage, key, mask, length, rx_payload, crc
+        for raw in bytes(data):
+            if stage == 0:
+                if raw == 0x55:
+                    crc = _crc8_step(137, 0x55)
+                    stage = 1
+                continue
+            if stage == 1:
+                key = raw
+                mask = _crc8_table_value(key)
+                crc = _crc8_step(crc, key)
+                stage = 2
+                continue
+            decoded = raw ^ mask
+            if stage == 2:
+                length = decoded
+                crc = _crc8_step(crc, decoded)
+                stage = 3
+                continue
+            if stage == 3:
+                length |= decoded << 8
+                crc = _crc8_step(crc, decoded)
+                if not 1 <= length <= 300:
+                    stage = 0
+                    continue
+                rx_payload = bytearray()
+                stage = 4
+                continue
+            if len(rx_payload) < length:
+                rx_payload.append(decoded)
+                crc = _crc8_step(crc, decoded)
+                continue
+            if decoded == crc and not result.done():
+                result.set_result(bytes(rx_payload))
+            stage = 0
+
+    await client.start_notify(core.CHAR_DFU_NOTIFY, on_notify)
+    try:
+        frame = _dfu_pack(payload)
+        for offset in range(0, len(frame), 197):
+            await client.write_gatt_char(
+                core.CHAR_DFU_WRITE,
+                frame[offset : offset + 197],
+                response=False,
+            )
+        return await asyncio.wait_for(result, timeout=5.0)
+    finally:
+        try:
+            await client.stop_notify(core.CHAR_DFU_NOTIFY)
+        except Exception:
+            pass
+
+
+async def _load_device_info(self) -> None:
+    serial = None
+    firmware = None
+    try:
+        response = await _dfu_request(self, b"\x8a")
+        if len(response) >= 2 and (response[0] & 0x7F) == 4:
+            raw = response[1]
+            firmware = f"{raw // 10}.{raw % 10}"
+    except Exception as exc:
+        LOG.info("W96D firmware read unavailable: %s: %s", type(exc).__name__, exc)
+
+    try:
+        response = await _dfu_request(self, b"\x8f")
+        if len(response) >= 5 and (response[0] & 0x7F) == 10:
+            serial = str(int.from_bytes(response[1:5], "little", signed=False))
+    except Exception as exc:
+        LOG.info("W96D serial read unavailable: %s: %s", type(exc).__name__, exc)
+
+    updates: dict[str, object] = {}
+    if serial:
+        updates["serial_number"] = serial
+    if firmware:
+        updates["firmware_version"] = firmware
+    if updates:
+        self._update_state(**updates)
+
+
 async def _coordinated_connect(self) -> None:
     if not self.enabled or not self.policy.scheduled() or self.pause_store.get():
         return
@@ -108,6 +228,7 @@ async def _coordinated_connect(self) -> None:
         self._coord_failed_refreshes = 0
         self._coord_read_warn_at = {}
         self._coord_force_telemetry = False
+        self._coord_force_settings = False
         self._update_state(
             connected=True,
             available=True,
@@ -115,6 +236,7 @@ async def _coordinated_connect(self) -> None:
             error=None,
         )
         LOG.info("connected W96D at %s", address)
+        await _load_device_info(self)
     finally:
         await _safe_release(token, "w96d-connect")
 
@@ -157,6 +279,7 @@ async def _low_pressure_refresh_unlocked(self):
     snapshot = self.snapshot()
     initial = snapshot.get("updated_at") is None
     force_telemetry = bool(getattr(self, "_coord_force_telemetry", False))
+    force_settings = bool(getattr(self, "_coord_force_settings", False))
 
     updates: dict[str, object] = {
         "connected": True,
@@ -166,7 +289,9 @@ async def _low_pressure_refresh_unlocked(self):
 
     power = await _read_optional(self, "FFF1/power", core.CHAR_POWER)
     if power:
-        updates["power"] = bool(power[0])
+        gear = int(power[0])
+        updates["power"] = gear != 0
+        updates["gear"] = gear
         successful += 1
 
     speed = await _read_optional(self, "FFF3/speed", core.CHAR_SPEED)
@@ -179,8 +304,9 @@ async def _low_pressure_refresh_unlocked(self):
         updates["natural"] = bool(natural[0])
         successful += 1
 
+    # UI-level state: roughly every 6 seconds.
     if initial or cycle % 3 == 1:
-        light = await _read_optional(self, "FFFA/indicator", core.CHAR_LIGHT)
+        light = await _read_optional(self, "FFFA/light", core.CHAR_LIGHT)
         if light:
             updates["indicator"] = bool(light[0])
             successful += 1
@@ -196,12 +322,47 @@ async def _low_pressure_refresh_unlocked(self):
             updates["turbo_remaining_seconds"] = remain
             successful += 1
 
+        timer = await _read_optional(self, "FFF2/timer", core.CHAR_TIMER)
+        if timer is not None and len(timer) >= 2:
+            updates["timer_remaining_seconds"] = int.from_bytes(timer[:2], "big")
+            successful += 1
+
+    # Persistent settings: roughly every 30 seconds, or immediately after a change.
+    if initial or force_settings or cycle % 15 == 1:
+        self._coord_force_settings = False
+
+        sleep_delay = await _read_optional(
+            self,
+            "FFF5/sleep_delay",
+            core.CHAR_SHUTDOWN_DELAY,
+        )
+        if sleep_delay is not None and len(sleep_delay) >= 2:
+            updates["sleep_delay_seconds"] = int.from_bytes(sleep_delay[:2], "big")
+            successful += 1
+
+        gear_down = await _read_optional(self, "FFF6/gear_down", core.CHAR_GEAR_DOWN)
+        if gear_down:
+            updates["gear_down_mode"] = int(gear_down[0])
+            successful += 1
+
+        gear_speeds = await _read_optional(
+            self,
+            "FFF7/gear_speeds",
+            core.CHAR_SPEED_CALIB,
+        )
+        if gear_speeds is not None and len(gear_speeds) >= 4:
+            updates["gear_speeds"] = [int(v) for v in gear_speeds[:4]]
+            successful += 1
+
+        turbo_time = await _read_optional(self, "FFF8/turbo_time", core.CHAR_TURBO_TIME)
+        if turbo_time is not None and len(turbo_time) >= 2:
+            updates["turbo_time_seconds"] = int.from_bytes(turbo_time[:2], "big")
+            successful += 1
+
     # Differential captures verified these telemetry layouts:
     # FFD1 [0:2] battery mV, [2:4] signed battery mA, [4:8] capacity mWh.
-    # FFD2 [0:4] VBUS mV. The remaining bytes are not assigned a meaning yet.
+    # FFD2 [0:4] VBUS mV and [7] charge/discharge state. [4:6] is NOT current.
     # FFD3 [0:2] motor mA, [4:6] motor mV. [2:4] remains unknown.
-    # Keep slow telemetry at ~10 s normally, but force one sample immediately
-    # after a control command so the UI never presents an old motor reading as fresh.
     if initial or force_telemetry or cycle % 5 == 1:
         self._coord_force_telemetry = False
 
@@ -222,6 +383,8 @@ async def _low_pressure_refresh_unlocked(self):
         )
         if power_status is not None and len(power_status) >= 4:
             updates["vbus_voltage_mv"] = int.from_bytes(power_status[0:4], "big")
+            if len(power_status) >= 8:
+                updates["charge_status"] = int(power_status[7])
             successful += 1
 
         motor = await _read_optional(self, "FFD3/motor", core.CHAR_MOTOR)
@@ -269,7 +432,18 @@ async def _coordinated_refresh_locked(self):
 
 
 async def _coordinated_patch(self, body):
-    allowed = {"power", "speed", "natural", "turbo", "indicator"}
+    allowed = {
+        "power",
+        "speed",
+        "natural",
+        "turbo",
+        "indicator",
+        "timer_seconds",
+        "sleep_delay_seconds",
+        "gear_down_mode",
+        "turbo_time_seconds",
+        "battery_profile",
+    }
     unknown = set(body) - allowed
     if unknown:
         raise ValueError(f"unknown field(s): {', '.join(sorted(unknown))}")
@@ -298,6 +472,7 @@ async def _coordinated_patch(self, body):
                 await asyncio.sleep(0.06)
                 optimistic.update(
                     power=True,
+                    gear=1,
                     speed=speed,
                     natural=False,
                     turbo=False,
@@ -328,9 +503,57 @@ async def _coordinated_patch(self, body):
                 await self._write(core.CHAR_POWER, bytes([1 if value else 0]))
                 optimistic.update(
                     power=value,
+                    gear=1 if value else 0,
                     turbo=False,
                     natural=False,
                 )
+
+            if "timer_seconds" in body:
+                seconds = core._as_int(body["timer_seconds"], "timer_seconds", 0, 28_800)
+                await self._write(core.CHAR_TIMER, seconds.to_bytes(2, "big"))
+                optimistic["timer_remaining_seconds"] = seconds
+
+            if "sleep_delay_seconds" in body:
+                seconds = core._as_int(
+                    body["sleep_delay_seconds"],
+                    "sleep_delay_seconds",
+                    0,
+                    65_535,
+                )
+                if 1 <= seconds <= 9:
+                    raise ValueError("sleep_delay_seconds must be 0 or 10..65535")
+                await self._write(core.CHAR_SHUTDOWN_DELAY, seconds.to_bytes(2, "big"))
+                optimistic["sleep_delay_seconds"] = seconds
+                self._coord_force_settings = True
+
+            if "gear_down_mode" in body:
+                mode = core._as_int(body["gear_down_mode"], "gear_down_mode", 0, 1)
+                await self._write(core.CHAR_GEAR_DOWN, bytes([mode]))
+                optimistic["gear_down_mode"] = mode
+                self._coord_force_settings = True
+
+            if "turbo_time_seconds" in body:
+                seconds = core._as_int(
+                    body["turbo_time_seconds"],
+                    "turbo_time_seconds",
+                    0,
+                    600,
+                )
+                await self._write(core.CHAR_TURBO_TIME, seconds.to_bytes(2, "big"))
+                optimistic["turbo_time_seconds"] = seconds
+                self._coord_force_settings = True
+
+            if "battery_profile" in body:
+                profile = core._as_int(body["battery_profile"], "battery_profile", 4800, 5000)
+                if profile not in {4800, 5000}:
+                    raise ValueError("battery_profile must be 4800 or 5000")
+                capacity = 17_200 if profile == 4800 else 18_000
+                await self._write(
+                    core.CHAR_BATTERY,
+                    f"BAT_CAP={capacity},".encode("ascii"),
+                )
+                optimistic["battery_capacity_mwh"] = capacity
+                self._coord_force_telemetry = True
 
             if optimistic:
                 optimistic["error"] = None
