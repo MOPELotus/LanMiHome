@@ -479,7 +479,6 @@ internal class W96dGattClient(private val context: Context) {
                     next = next.copy(
                         vbusVoltageMv = powerStatus.beU32OrNull(0),
                         chargeStatus = powerStatus.getOrNull(7)?.toInt()?.and(0xff),
-                        vbusCurrentMa = null,
                     )
                     successful += 1
                 }
@@ -489,7 +488,6 @@ internal class W96dGattClient(private val context: Context) {
                     next = next.copy(
                         motorCurrentMa = motor.beU16OrNull(0),
                         motorVoltageMv = motor.beU16OrNull(4),
-                        motorBlocked = null,
                     )
                     successful += 1
                 }
