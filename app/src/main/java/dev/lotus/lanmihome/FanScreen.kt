@@ -13,68 +13,80 @@ import kotlin.math.roundToInt
 @Composable
 fun FanScreen(state:FanState?, recovery:RecoveryState?, enabled:Boolean, patch:(Array<Pair<String,Any>>)->Unit, action:(String)->Unit, recover:()->Unit) {
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement=Arrangement.spacedBy(12.dp)) {
-        if(state==null) { CircularProgressIndicator(); Text("正在读取风扇…"); return@Column }
+        if(state==null) { CircularProgressIndicator(); Text("正在连接风扇…"); return@Column }
         val ok=state.available
         DeviceHeader(state.name ?: "米家直流变频落地扇 1X", state.ip, ok, state.error)
 
         Section("电源") {
-            ToggleLine(if(state.power==true) "风扇已开启" else "风扇已关闭", state.power==true, ok&&enabled,
-                "使用 p5c 实机验证的读状态 + toggle 幂等逻辑") { patch(arrayOf("power" to it)) }
+            ToggleLine(if(state.power==true) "已开启" else "已关闭", state.power==true, ok&&enabled) {
+                patch(arrayOf("power" to it))
+            }
         }
 
         var speed by remember(state.speed) { mutableFloatStateOf((state.speed ?: 1).toFloat()) }
-        Section("无级风速 · ${speed.roundToInt()}") {
+        Section("风速 · ${speed.roundToInt()}%") {
             Slider(speed, {speed=it}, valueRange=1f..100f, enabled=ok&&enabled,
                 onValueChangeFinished={patch(arrayOf("speed" to speed.roundToInt()))})
             Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement=Arrangement.spacedBy(8.dp)) {
-                listOf(1 to "1档",35 to "2档",70 to "3档",100 to "4档").forEach { (v,n) ->
-                    AssistChip(onClick={patch(arrayOf("speed" to v))}, enabled=ok&&enabled, label={Text("$n · $v")})
+                listOf(1 to "轻柔",35 to "舒适",70 to "强劲",100 to "最大").forEach { (v,n) ->
+                    AssistChip(onClick={patch(arrayOf("speed" to v))}, enabled=ok&&enabled, label={Text(n)})
                 }
             }
         }
 
-        Section("风型") {
+        Section("风感") {
             Row(horizontalArrangement=Arrangement.spacedBy(8.dp)) {
-                FilterChip(state.mode==0,{patch(arrayOf("mode" to "straight"))},{Text("直吹风")},enabled=ok&&enabled)
+                FilterChip(state.mode==0,{patch(arrayOf("mode" to "straight"))},{Text("直吹")},enabled=ok&&enabled)
                 FilterChip(state.mode==1,{patch(arrayOf("mode" to "natural"))},{Text("自然风")},enabled=ok&&enabled)
             }
         }
 
-        Section("摆头") {
-            ToggleLine("左右摆头", state.swing==true, ok&&enabled) { patch(arrayOf("swing" to it)) }
+        Section("摆风") {
+            ToggleLine("左右摆风", state.swing==true, ok&&enabled) { patch(arrayOf("swing" to it)) }
             Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement=Arrangement.spacedBy(8.dp)) {
                 listOf(30,60,90,120,140).forEach { a ->
                     FilterChip(state.swingAngle==a,{patch(arrayOf("swing_angle" to a))},{Text("$a°")},enabled=ok&&enabled)
                 }
             }
             Row(horizontalArrangement=Arrangement.spacedBy(8.dp)) {
-                OutlinedButton({action("turn-left")},Modifier.weight(1f),enabled=ok&&enabled){Text("← 微调")}
-                OutlinedButton({action("turn-right")},Modifier.weight(1f),enabled=ok&&enabled){Text("微调 →")}
+                OutlinedButton({action("turn-left")},Modifier.weight(1f),enabled=ok&&enabled){Text("向左微调")}
+                OutlinedButton({action("turn-right")},Modifier.weight(1f),enabled=ok&&enabled){Text("向右微调")}
             }
         }
 
         var timer by remember(state.offDelay) { mutableFloatStateOf((state.offDelay ?: 0).toFloat()) }
-        Section("延时关机 · ${timer.roundToInt()} 分钟") {
+        Section("定时关闭 · ${timer.roundToInt()} 分钟") {
             Slider(timer,{timer=it},valueRange=0f..480f,enabled=ok&&enabled,
                 onValueChangeFinished={patch(arrayOf("off_delay_minutes" to timer.roundToInt()))})
             Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement=Arrangement.spacedBy(8.dp)) {
-                listOf(0,30,60,120,240,480).forEach { m -> AssistChip({patch(arrayOf("off_delay_minutes" to m))},label={Text(if(m==0)"关闭" else "${m}分")},enabled=ok&&enabled) }
+                listOf(0,30,60,120,240,480).forEach { m ->
+                    AssistChip({patch(arrayOf("off_delay_minutes" to m))},label={Text(if(m==0)"关闭定时" else "${m} 分钟")},enabled=ok&&enabled)
+                }
             }
         }
 
         Section("设备设置") {
             ToggleLine("指示灯",state.indicator==true,ok&&enabled){patch(arrayOf("indicator" to it))}
             HorizontalDivider()
-            ToggleLine("操作提示音",state.alarm==true,ok&&enabled){patch(arrayOf("alarm" to it))}
+            ToggleLine("按键提示音",state.alarm==true,ok&&enabled){patch(arrayOf("alarm" to it))}
             HorizontalDivider()
-            ToggleLine("童锁 / 实体按键锁",state.childLock==true,ok&&enabled){patch(arrayOf("child_lock" to it))}
+            ToggleLine("童锁",state.childLock==true,ok&&enabled,"开启后将锁定机身按键"){patch(arrayOf("child_lock" to it))}
         }
 
-        Section("来电恢复") {
-            Text(when { recovery==null->"尚未读取"; recovery.active->"正在重试 · ${recovery.attempts} 次"; recovery.success->"最近恢复成功"; else->recovery.reason ?: "未运行" })
-            recovery?.error?.let { Text(it,color=MaterialTheme.colorScheme.error) }
-            Text("自动恢复只在路由器于 05:00–06:30 启动时触发。",style=MaterialTheme.typography.bodySmall)
-            OutlinedButton(recover,enabled=enabled){Text("强制测试拉起")}
+        Section("断电恢复") {
+            Text(
+                when {
+                    recovery==null -> "自动恢复已开启"
+                    recovery.active -> "正在恢复风扇…"
+                    recovery.success -> "风扇已恢复"
+                    else -> "等待下次供电恢复"
+                }
+            )
+            if (recovery?.error != null) {
+                Text("上次恢复未完成，将在下次自动重试", color=MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            Text("宿舍恢复供电后，会自动尝试将风扇恢复到可用状态。",style=MaterialTheme.typography.bodySmall)
+            OutlinedButton(recover,enabled=enabled){Text("立即恢复")}
         }
     }
 }
