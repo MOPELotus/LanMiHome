@@ -2,10 +2,13 @@ package dev.lotus.lanmihome
 
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 
@@ -18,33 +21,89 @@ fun ChargerScreen(
     setProtocol: (String, String, String, Boolean) -> Unit,
     setTimer: (String, String, Int) -> Unit,
 ) {
-    Column(
-        Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(14.dp),
-    ) {
-        Text("充电设备", style = MaterialTheme.typography.headlineSmall)
+    Column(Modifier.fillMaxSize()) {
+        Row(
+            Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 16.dp, bottom = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween,
+        ) {
+            Text("充电设备", style = MaterialTheme.typography.headlineSmall)
+            if (!chargers.isNullOrEmpty() && chargers.size > 1) {
+                Text(
+                    "左右滑动切换",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
 
         if (chargers == null) {
-            CircularProgressIndicator()
-            Text("正在连接充电设备…")
+            Column(
+                Modifier.fillMaxSize().padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                CircularProgressIndicator()
+                Text("正在连接充电设备…")
+            }
             return@Column
         }
         if (chargers.isEmpty()) {
-            Text("暂时没有可用的充电设备。")
+            Text("暂时没有可用的充电设备。", Modifier.padding(16.dp))
             return@Column
         }
 
-        chargers.forEachIndexed { index, charger ->
-            ChargerDevice(
-                charger = charger,
-                enabled = enabled,
-                patch = patch,
-                setPort = setPort,
-                setProtocol = setProtocol,
-                setTimer = setTimer,
-            )
-            if (index != chargers.lastIndex) {
-                HorizontalDivider(Modifier.padding(vertical = 6.dp))
+        val pagerState = rememberPagerState(pageCount = { chargers.size })
+
+        HorizontalPager(
+            state = pagerState,
+            modifier = Modifier.fillMaxWidth().weight(1f),
+            pageSpacing = 12.dp,
+            beyondViewportPageCount = 1,
+        ) { page ->
+            val charger = chargers[page]
+            Column(
+                Modifier
+                    .fillMaxSize()
+                    .verticalScroll(rememberScrollState())
+                    .padding(start = 16.dp, end = 16.dp, top = 4.dp, bottom = 16.dp),
+                verticalArrangement = Arrangement.spacedBy(14.dp),
+            ) {
+                ChargerDevice(
+                    charger = charger,
+                    enabled = enabled,
+                    patch = patch,
+                    setPort = setPort,
+                    setProtocol = setProtocol,
+                    setTimer = setTimer,
+                )
+            }
+        }
+
+        if (chargers.size > 1) {
+            Row(
+                Modifier.fillMaxWidth().padding(bottom = 10.dp),
+                horizontalArrangement = Arrangement.Center,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                chargers.forEachIndexed { index, charger ->
+                    val selected = pagerState.currentPage == index
+                    Text(
+                        if (selected) "●" else "○",
+                        style = MaterialTheme.typography.labelLarge,
+                        color = if (selected) {
+                            MaterialTheme.colorScheme.primary
+                        } else {
+                            MaterialTheme.colorScheme.onSurfaceVariant
+                        },
+                    )
+                    if (index != chargers.lastIndex) Spacer(Modifier.width(8.dp))
+                }
+                Spacer(Modifier.width(10.dp))
+                Text(
+                    chargerDisplayName(chargers[pagerState.currentPage].name),
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             }
         }
     }
