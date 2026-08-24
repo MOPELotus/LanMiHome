@@ -1,5 +1,7 @@
 package dev.lotus.lanmihome
 
+import android.view.ViewGroup
+import android.widget.NumberPicker
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
@@ -35,6 +37,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.viewinterop.AndroidView
 import kotlin.math.roundToInt
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
@@ -53,6 +56,10 @@ internal fun W96dScreen(primaryBase: String) {
     var speedDraft by remember { mutableIntStateOf(W96dPrefs.lastSpeed(context)) }
     var forceOutdoorDialog by remember { mutableStateOf(false) }
     var pendingPermissionOutdoor by remember { mutableStateOf(false) }
+    var sleepDelayDialog by remember { mutableStateOf(false) }
+    var sleepDelayHours by remember { mutableIntStateOf(0) }
+    var sleepDelayMinutes by remember { mutableIntStateOf(5) }
+    var sleepDelaySeconds by remember { mutableIntStateOf(0) }
 
     fun acceptState(next: W96dState) {
         state = next
@@ -461,17 +468,37 @@ internal fun W96dScreen(primaryBase: String) {
                 )
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     OutlinedButton(
+                        modifier = Modifier.weight(1f),
                         enabled = controlsEnabled,
                         onClick = { command("sleep_delay_seconds", 0) },
-                    ) { Text("保持连接") }
+                    ) {
+                        Text(if (current?.sleepDelaySeconds == 0) "✓ 保持连接" else "保持连接")
+                    }
                     OutlinedButton(
+                        modifier = Modifier.weight(1f),
                         enabled = controlsEnabled,
                         onClick = { command("sleep_delay_seconds", 300) },
-                    ) { Text("5 分钟") }
+                    ) {
+                        Text(if (current?.sleepDelaySeconds == 300) "✓ 默认 5 分钟" else "默认 5 分钟")
+                    }
                     OutlinedButton(
+                        modifier = Modifier.weight(1f),
                         enabled = controlsEnabled,
-                        onClick = { command("sleep_delay_seconds", 1800) },
-                    ) { Text("30 分钟") }
+                        onClick = {
+                            val seed = current?.sleepDelaySeconds
+                                ?.takeIf { it in 10..65_535 }
+                                ?: 300
+                            sleepDelayHours = seed / 3600
+                            sleepDelayMinutes = (seed % 3600) / 60
+                            sleepDelaySeconds = seed % 60
+                            sleepDelayDialog = true
+                        },
+                    ) {
+                        val customSelected = current?.sleepDelaySeconds
+                            ?.let { it != 0 && it != 300 }
+                            ?: false
+                        Text(if (customSelected) "✓ 自定义" else "自定义")
+                    }
                 }
 
                 HorizontalDivider()
@@ -542,6 +569,108 @@ internal fun W96dScreen(primaryBase: String) {
                 TextButton(onClick = { forceOutdoorDialog = false }) { Text("取消") }
             },
         )
+    }
+
+    if (sleepDelayDialog) {
+        val customSeconds = sleepDelayHours * 3600 + sleepDelayMinutes * 60 + sleepDelaySeconds
+        val validCustomDelay = customSeconds in 10..65_535
+        AlertDialog(
+            onDismissRequest = { sleepDelayDialog = false },
+            title = { Text("自定义蓝牙休眠") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text("关机后等待多久再关闭蓝牙连接")
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        NumberWheel(
+                            label = "时",
+                            value = sleepDelayHours,
+                            range = 0..18,
+                            modifier = Modifier.weight(1f),
+                            onValueChange = { sleepDelayHours = it },
+                        )
+                        NumberWheel(
+                            label = "分",
+                            value = sleepDelayMinutes,
+                            range = 0..59,
+                            modifier = Modifier.weight(1f),
+                            onValueChange = { sleepDelayMinutes = it },
+                        )
+                        NumberWheel(
+                            label = "秒",
+                            value = sleepDelaySeconds,
+                            range = 0..59,
+                            modifier = Modifier.weight(1f),
+                            onValueChange = { sleepDelaySeconds = it },
+                        )
+                    }
+                    Text(
+                        if (validCustomDelay) {
+                            "将设置为 ${durationText(customSeconds)}"
+                        } else {
+                            "可设置范围：00:00:10 – 18:12:15"
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                        color = if (validCustomDelay) {
+                            MaterialTheme.colorScheme.onSurfaceVariant
+                        } else {
+                            MaterialTheme.colorScheme.error
+                        },
+                    )
+                }
+            },
+            confirmButton = {
+                Button(
+                    enabled = validCustomDelay && controlsEnabled,
+                    onClick = {
+                        sleepDelayDialog = false
+                        command("sleep_delay_seconds", customSeconds)
+                    },
+                ) { Text("应用") }
+            },
+            dismissButton = {
+                TextButton(onClick = { sleepDelayDialog = false }) { Text("取消") }
+            },
+        )
+    }
+}
+
+@Composable
+private fun NumberWheel(
+    label: String,
+    value: Int,
+    range: IntRange,
+    modifier: Modifier = Modifier,
+    onValueChange: (Int) -> Unit,
+) {
+    Column(
+        modifier = modifier,
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        AndroidView(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(132.dp),
+            factory = { context ->
+                NumberPicker(context).apply {
+                    minValue = range.first
+                    maxValue = range.last
+                    wrapSelectorWheel = true
+                    descendantFocusability = ViewGroup.FOCUS_BLOCK_DESCENDANTS
+                    setFormatter { "%02d".format(it) }
+                }
+            },
+            update = { picker ->
+                picker.minValue = range.first
+                picker.maxValue = range.last
+                if (picker.value != value) picker.value = value
+                picker.setOnValueChangedListener { _, _, next -> onValueChange(next) }
+            },
+        )
+        Text(label, style = MaterialTheme.typography.labelMedium)
     }
 }
 
