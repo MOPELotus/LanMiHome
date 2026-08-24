@@ -21,12 +21,16 @@ LOG = logging.getLogger("lanmihome.w96d")
 
 UUID_BASE = "0000{:04x}-0000-1000-8000-00805f9b34fb"
 
+
 def uuid16(value: int) -> str:
     return UUID_BASE.format(value)
 
+
 SERVICE_MAIN = uuid16(0xFFF0)
 SERVICE_POWER = uuid16(0xFFD0)
+SERVICE_DFU = uuid16(0xFEE0)
 CHAR_POWER = uuid16(0xFFF1)
+CHAR_TIMER = uuid16(0xFFF2)
 CHAR_SPEED = uuid16(0xFFF3)
 CHAR_NATURAL = uuid16(0xFFF4)
 CHAR_SHUTDOWN_DELAY = uuid16(0xFFF5)
@@ -39,6 +43,8 @@ CHAR_TURBO = uuid16(0xFFFC)
 CHAR_BATTERY = uuid16(0xFFD1)
 CHAR_POWER_STATUS = uuid16(0xFFD2)
 CHAR_MOTOR = uuid16(0xFFD3)
+CHAR_DFU_WRITE = uuid16(0xFEE1)
+CHAR_DFU_NOTIFY = uuid16(0xFEE2)
 
 
 def _parse_hhmm(value: str) -> int:
@@ -83,20 +89,26 @@ class W96DState:
     scheduled: bool = False
     paused: bool = False
     power: bool | None = None
+    gear: int | None = None
     speed: int | None = None
     natural: bool | None = None
     turbo: bool | None = None
     turbo_remaining_seconds: int | None = None
+    turbo_time_seconds: int | None = None
+    timer_remaining_seconds: int | None = None
+    sleep_delay_seconds: int | None = None
+    gear_down_mode: int | None = None
+    gear_speeds: list[int] | None = None
     indicator: bool | None = None
     battery_voltage_mv: int | None = None
     battery_current_ma: int | None = None
     battery_capacity_mwh: int | None = None
     vbus_voltage_mv: int | None = None
-    vbus_current_ma: int | None = None
     charge_status: int | None = None
     motor_current_ma: int | None = None
     motor_voltage_mv: int | None = None
-    motor_blocked: bool | None = None
+    serial_number: str | None = None
+    firmware_version: str | None = None
     error: str | None = None
     updated_at: str | None = None
 
@@ -244,40 +256,60 @@ class W96DManager:
 
     async def _refresh_unlocked(self) -> dict[str, Any]:
         power = await self._read(CHAR_POWER)
+        timer = await self._read(CHAR_TIMER)
         speed = await self._read(CHAR_SPEED)
         natural = await self._read(CHAR_NATURAL)
+        sleep_delay = await self._read(CHAR_SHUTDOWN_DELAY)
+        gear_down = await self._read(CHAR_GEAR_DOWN)
+        gear_speeds = await self._read(CHAR_SPEED_CALIB)
+        turbo_time = await self._read(CHAR_TURBO_TIME)
         light = await self._read(CHAR_LIGHT)
         turbo_remaining = await self._read(CHAR_TURBO_REMAINING)
         battery = await self._read(CHAR_BATTERY)
         power_status = await self._read(CHAR_POWER_STATUS)
         motor = await self._read(CHAR_MOTOR)
 
+        gear = int(power[0]) if power else None
         updates: dict[str, Any] = {
             "available": True,
             "connected": True,
-            "power": bool(power[0]) if power else None,
+            "power": gear != 0 if gear is not None else None,
+            "gear": gear,
             "speed": int(speed[0]) if speed else None,
             "natural": bool(natural[0]) if natural else None,
             "indicator": bool(light[0]) if light else None,
             "error": None,
             "updated_at": datetime.now().astimezone().isoformat(timespec="seconds"),
         }
+        if len(timer) >= 2:
+            updates["timer_remaining_seconds"] = int.from_bytes(timer[:2], "big")
+        if len(sleep_delay) >= 2:
+            updates["sleep_delay_seconds"] = int.from_bytes(sleep_delay[:2], "big")
+        if gear_down:
+            updates["gear_down_mode"] = int(gear_down[0])
+        if len(gear_speeds) >= 4:
+            updates["gear_speeds"] = [int(v) for v in gear_speeds[:4]]
+        if len(turbo_time) >= 2:
+            updates["turbo_time_seconds"] = int.from_bytes(turbo_time[:2], "big")
         if len(turbo_remaining) >= 2:
             remain = int.from_bytes(turbo_remaining[:2], "big")
             updates.update(turbo=remain > 0, turbo_remaining_seconds=remain)
         if len(battery) >= 8:
             voltage, current, capacity = struct.unpack(">HhI", battery[:8])
-            updates.update(battery_voltage_mv=voltage, battery_current_ma=current, battery_capacity_mwh=capacity)
-        if len(power_status) >= 8:
-            vbus_voltage = int.from_bytes(power_status[0:4], "big")
-            vbus_current = int.from_bytes(power_status[4:6], "big", signed=True)
-            if vbus_current == 0x7FFF:
-                vbus_current = 0
-            updates.update(vbus_voltage_mv=vbus_voltage, vbus_current_ma=vbus_current, charge_status=power_status[7])
-        if len(motor) >= 3:
-            current = int.from_bytes(motor[0:2], "big")
-            voltage = int.from_bytes(motor[-2:], "big")
-            updates.update(motor_current_ma=current, motor_voltage_mv=voltage, motor_blocked=bool(motor[2]))
+            updates.update(
+                battery_voltage_mv=voltage,
+                battery_current_ma=current,
+                battery_capacity_mwh=capacity,
+            )
+        if len(power_status) >= 4:
+            updates["vbus_voltage_mv"] = int.from_bytes(power_status[0:4], "big")
+            if len(power_status) >= 8:
+                updates["charge_status"] = int(power_status[7])
+        if len(motor) >= 6:
+            updates.update(
+                motor_current_ma=int.from_bytes(motor[0:2], "big"),
+                motor_voltage_mv=int.from_bytes(motor[4:6], "big"),
+            )
         self._update_state(**updates)
         return self.snapshot()
 
@@ -292,7 +324,18 @@ class W96DManager:
             await self._connect()
 
     async def _patch(self, body: dict[str, Any]) -> dict[str, Any]:
-        allowed = {"power", "speed", "natural", "turbo", "indicator"}
+        allowed = {
+            "power",
+            "speed",
+            "natural",
+            "turbo",
+            "indicator",
+            "timer_seconds",
+            "sleep_delay_seconds",
+            "gear_down_mode",
+            "turbo_time_seconds",
+            "battery_profile",
+        }
         unknown = set(body) - allowed
         if unknown:
             raise ValueError(f"unknown field(s): {', '.join(sorted(unknown))}")
@@ -300,7 +343,10 @@ class W96DManager:
         async with self._op_lock:
             await self._ensure_owned()
             if "indicator" in body:
-                await self._write(CHAR_LIGHT, bytes([1 if _as_bool(body["indicator"], "indicator") else 0]))
+                await self._write(
+                    CHAR_LIGHT,
+                    bytes([1 if _as_bool(body["indicator"], "indicator") else 0]),
+                )
             if "speed" in body:
                 speed = _as_int(body["speed"], "speed", 0, 100)
                 await self._write(CHAR_TURBO, b"\x00")
@@ -325,6 +371,36 @@ class W96DManager:
                 await self._write(CHAR_TURBO, b"\x00")
                 await self._write(CHAR_NATURAL, b"\x00")
                 await self._write(CHAR_POWER, bytes([1 if value else 0]))
+            if "timer_seconds" in body:
+                seconds = _as_int(body["timer_seconds"], "timer_seconds", 0, 28_800)
+                await self._write(CHAR_TIMER, seconds.to_bytes(2, "big"))
+            if "sleep_delay_seconds" in body:
+                seconds = _as_int(
+                    body["sleep_delay_seconds"],
+                    "sleep_delay_seconds",
+                    0,
+                    65_535,
+                )
+                if 1 <= seconds <= 9:
+                    raise ValueError("sleep_delay_seconds must be 0 or 10..65535")
+                await self._write(CHAR_SHUTDOWN_DELAY, seconds.to_bytes(2, "big"))
+            if "gear_down_mode" in body:
+                mode = _as_int(body["gear_down_mode"], "gear_down_mode", 0, 1)
+                await self._write(CHAR_GEAR_DOWN, bytes([mode]))
+            if "turbo_time_seconds" in body:
+                seconds = _as_int(
+                    body["turbo_time_seconds"],
+                    "turbo_time_seconds",
+                    0,
+                    600,
+                )
+                await self._write(CHAR_TURBO_TIME, seconds.to_bytes(2, "big"))
+            if "battery_profile" in body:
+                profile = _as_int(body["battery_profile"], "battery_profile", 4800, 5000)
+                if profile not in {4800, 5000}:
+                    raise ValueError("battery_profile must be 4800 or 5000")
+                capacity = 17_200 if profile == 4800 else 18_000
+                await self._write(CHAR_BATTERY, f"BAT_CAP={capacity},".encode("ascii"))
             await asyncio.sleep(0.08)
             return await self._refresh_unlocked()
 
@@ -332,7 +408,10 @@ class W96DManager:
         self.pause_store.set(paused)
         if paused:
             await self._disconnect()
-        self._update_state(paused=paused, scheduled=self.enabled and self.policy.scheduled())
+        self._update_state(
+            paused=paused,
+            scheduled=self.enabled and self.policy.scheduled(),
+        )
         return self.snapshot()
 
     def call_patch(self, body: dict[str, Any], timeout: float = 15.0) -> dict[str, Any]:
@@ -342,6 +421,7 @@ class W96DManager:
         async def op() -> dict[str, Any]:
             await self._ensure_owned()
             return await self._refresh_locked()
+
         return self._call(op(), timeout)
 
     def set_paused(self, paused: bool, timeout: float = 8.0) -> dict[str, Any]:
@@ -356,7 +436,9 @@ class W96DManager:
             state = asdict(self._state)
         state["scheduled"] = self.enabled and self.policy.scheduled()
         state["paused"] = self.pause_store.get()
-        state["available"] = bool(state["connected"] and state["scheduled"] and not state["paused"])
+        state["available"] = bool(
+            state["connected"] and state["scheduled"] and not state["paused"]
+        )
         return state
 
     def _update_state(self, **changes: Any) -> None:
@@ -368,10 +450,12 @@ class W96DManager:
     def stop(self) -> None:
         if not self._thread.is_alive():
             return
+
         async def shutdown():
             if self._stop_evt is not None:
                 self._stop_evt.set()
             await self._disconnect()
+
         asyncio.run_coroutine_threadsafe(shutdown(), self._loop).result(timeout=5)
         self._loop.call_soon_threadsafe(self._loop.stop)
         self._thread.join(timeout=5)
@@ -408,7 +492,15 @@ class ApiHandler(BaseHTTPRequestHandler):
         path = self.path.split("?", 1)[0].rstrip("/") or "/"
         try:
             if path in {"/", "/api/v1/health"}:
-                self._json(HTTPStatus.OK, {"ok": True, "service": "lanmihome-w96d", "version": 1, "w96d": self.manager.snapshot()})
+                self._json(
+                    HTTPStatus.OK,
+                    {
+                        "ok": True,
+                        "service": "lanmihome-w96d",
+                        "version": 1,
+                        "w96d": self.manager.snapshot(),
+                    },
+                )
             elif path == "/api/v1/w96d":
                 state = self.manager.snapshot()
                 if state.get("available"):
@@ -419,7 +511,15 @@ class ApiHandler(BaseHTTPRequestHandler):
                 self._json(HTTPStatus.OK, state)
             elif path == "/api/v1/w96d/ownership":
                 state = self.manager.snapshot()
-                self._json(HTTPStatus.OK, {"owner": "router", "scheduled": state["scheduled"], "paused": state["paused"], "connected": state["connected"]})
+                self._json(
+                    HTTPStatus.OK,
+                    {
+                        "owner": "router",
+                        "scheduled": state["scheduled"],
+                        "paused": state["paused"],
+                        "connected": state["connected"],
+                    },
+                )
             else:
                 self._json(HTTPStatus.NOT_FOUND, {"error": "not found"})
         except Exception as exc:
@@ -448,7 +548,16 @@ class ApiHandler(BaseHTTPRequestHandler):
                 state = self.manager.set_paused(False)
             else:
                 raise ValueError("state must be release or resume")
-            self._json(HTTPStatus.OK, {"ok": True, "owner": "router", "scheduled": state["scheduled"], "paused": state["paused"], "connected": state["connected"]})
+            self._json(
+                HTTPStatus.OK,
+                {
+                    "ok": True,
+                    "owner": "router",
+                    "scheduled": state["scheduled"],
+                    "paused": state["paused"],
+                    "connected": state["connected"],
+                },
+            )
         except Exception as exc:
             self._error(exc)
 
@@ -464,11 +573,19 @@ class ApiHandler(BaseHTTPRequestHandler):
         return data
 
     def _error(self, exc: Exception) -> None:
-        status = HTTPStatus.BAD_REQUEST if isinstance(exc, ValueError) else HTTPStatus.SERVICE_UNAVAILABLE
+        status = (
+            HTTPStatus.BAD_REQUEST
+            if isinstance(exc, ValueError)
+            else HTTPStatus.SERVICE_UNAVAILABLE
+        )
         self._json(status, {"error": f"{type(exc).__name__}: {exc}"})
 
     def _json(self, status: HTTPStatus, payload: dict[str, Any]) -> None:
-        data = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+        data = json.dumps(
+            payload,
+            ensure_ascii=False,
+            separators=(",", ":"),
+        ).encode("utf-8")
         self.send_response(status.value)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Cache-Control", "no-store")
@@ -501,15 +618,32 @@ def main() -> int:
     parser.add_argument("--config", default="/lotusemmc/lanmihome/w96d.json")
     parser.add_argument("--check-config", action="store_true")
     args = parser.parse_args()
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    )
     cfg = load_config(Path(args.config))
     manager = W96DManager(cfg)
     if args.check_config:
-        print(json.dumps({"ok": True, "site": manager.policy.site, "enabled": manager.enabled, "listen": cfg.get("listen", "0.0.0.0"), "port": int(cfg.get("port", 8766))}))
+        print(
+            json.dumps(
+                {
+                    "ok": True,
+                    "site": manager.policy.site,
+                    "enabled": manager.enabled,
+                    "listen": cfg.get("listen", "0.0.0.0"),
+                    "port": int(cfg.get("port", 8766)),
+                }
+            )
+        )
         return 0
 
     manager.start()
-    server = Server((str(cfg.get("listen", "0.0.0.0")), int(cfg.get("port", 8766))), ApiHandler, manager)
+    server = Server(
+        (str(cfg.get("listen", "0.0.0.0")), int(cfg.get("port", 8766))),
+        ApiHandler,
+        manager,
+    )
 
     def handle_signal(_signum, _frame):
         threading.Thread(target=server.shutdown, daemon=True).start()
