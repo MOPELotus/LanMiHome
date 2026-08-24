@@ -59,6 +59,11 @@ internal fun W96dScreen(primaryBase: String) {
         if (next.power == true && next.speed != null && next.speed in 1..100) {
             speedDraft = next.speed
             W96dPrefs.setLastSpeed(context, next.speed)
+        } else if (W96dPrefs.lastSpeedOrNull(context) == null) {
+            next.gearSpeeds
+                ?.firstOrNull()
+                ?.takeIf { it in 1..100 }
+                ?.let { speedDraft = it }
         }
         if (next.serialNumber != null || next.firmwareVersion != null) {
             W96dPrefs.rememberDeviceInfo(
@@ -305,8 +310,16 @@ internal fun W96dScreen(primaryBase: String) {
             Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 Text("风扇控制", style = MaterialTheme.typography.titleMedium)
                 ToggleRow("电源", current?.power, controlsEnabled) { on ->
-                    if (on) command("speed", W96dPrefs.lastSpeed(context))
-                    else command("power", false)
+                    if (on) {
+                        val restoreSpeed = W96dPrefs.lastSpeedOrNull(context)
+                            ?: current?.gearSpeeds
+                                ?.firstOrNull()
+                                ?.takeIf { it in 1..100 }
+                            ?: 15
+                        command("speed", restoreSpeed)
+                    } else {
+                        command("power", false)
+                    }
                 }
                 Text("风速 $speedDraft%")
                 Slider(
@@ -320,19 +333,22 @@ internal fun W96dScreen(primaryBase: String) {
                 ToggleRow("自然风", current?.natural, controlsEnabled) {
                     command("natural", it)
                 }
-                ToggleRow("Turbo 强劲模式", current?.turbo, controlsEnabled) {
-                    command("turbo", it)
+                Button(
+                    enabled = controlsEnabled && current?.turbo != true,
+                    onClick = { command("turbo", true) },
+                ) {
+                    Text(if (current?.turbo == true) "Turbo 运行中" else "启动 Turbo")
+                }
+                current?.turboRemainingSeconds?.takeIf { it > 0 }?.let {
+                    Text("Turbo 剩余 ${durationText(it)}", style = MaterialTheme.typography.bodySmall)
                 }
                 ToggleRow("灯光", current?.indicator, controlsEnabled) {
                     command("indicator", it)
                 }
-                current?.gear?.takeIf { it in 1..4 }?.let {
-                    Text("实体档位 ${it} 档", style = MaterialTheme.typography.bodySmall)
-                }
-                current?.turboRemainingSeconds?.takeIf { it > 0 }?.let {
-                    Text("强劲模式剩余 ${durationText(it)}", style = MaterialTheme.typography.bodySmall)
-                }
-                Text("风速支持 0–100% 无级调节；重新开机时恢复上次使用的风速。", style = MaterialTheme.typography.bodySmall)
+                Text(
+                    "风速支持 0–100% 无级调节；重新开机时恢复上次使用的风速。",
+                    style = MaterialTheme.typography.bodySmall,
+                )
             }
         }
 
@@ -346,20 +362,24 @@ internal fun W96dScreen(primaryBase: String) {
                     style = MaterialTheme.typography.bodyMedium,
                 )
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedButton(enabled = controlsEnabled, onClick = { command("timer_seconds", 1800) }) {
-                        Text("30 分钟")
-                    }
-                    OutlinedButton(enabled = controlsEnabled, onClick = { command("timer_seconds", 3600) }) {
-                        Text("1 小时")
-                    }
+                    OutlinedButton(
+                        enabled = controlsEnabled,
+                        onClick = { command("timer_seconds", 1800) },
+                    ) { Text("30 分钟") }
+                    OutlinedButton(
+                        enabled = controlsEnabled,
+                        onClick = { command("timer_seconds", 3600) },
+                    ) { Text("1 小时") }
                 }
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedButton(enabled = controlsEnabled, onClick = { command("timer_seconds", 14_400) }) {
-                        Text("4 小时")
-                    }
-                    OutlinedButton(enabled = controlsEnabled, onClick = { command("timer_seconds", 0) }) {
-                        Text("取消定时")
-                    }
+                    OutlinedButton(
+                        enabled = controlsEnabled,
+                        onClick = { command("timer_seconds", 14_400) },
+                    ) { Text("4 小时") }
+                    OutlinedButton(
+                        enabled = controlsEnabled,
+                        onClick = { command("timer_seconds", 0) },
+                    ) { Text("取消定时") }
                 }
             }
         }
@@ -459,7 +479,10 @@ internal fun W96dScreen(primaryBase: String) {
 
                 HorizontalDivider()
                 Text("Turbo 持续时间", style = MaterialTheme.typography.titleSmall)
-                Text(turboTimeText(current?.turboTimeSeconds), style = MaterialTheme.typography.bodySmall)
+                Text(
+                    turboTimeText(current?.turboTimeSeconds),
+                    style = MaterialTheme.typography.bodySmall,
+                )
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     OutlinedButton(
                         enabled = controlsEnabled,
