@@ -13,10 +13,12 @@ import kotlin.math.roundToInt
 @Composable
 fun LampScreen(state:LampState?, enabled:Boolean, patch:(Array<Pair<String,Any>>)->Unit, action:(String,Int?)->Unit) {
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement=Arrangement.spacedBy(12.dp)) {
-        if(state==null) { CircularProgressIndicator(); Text("正在读取台灯…"); return@Column }
+        if(state==null) { CircularProgressIndicator(); Text("正在连接台灯…"); return@Column }
         val ok=state.available
         DeviceHeader(state.name ?: "米家台灯 2", state.ip, ok, state.error)
-        Section("电源") { ToggleLine(if(state.power==true)"台灯已开启" else "台灯已关闭",state.power==true,ok&&enabled){patch(arrayOf("power" to it))} }
+        Section("电源") {
+            ToggleLine(if(state.power==true)"已开启" else "已关闭",state.power==true,ok&&enabled){patch(arrayOf("power" to it))}
+        }
 
         var brightness by remember(state.brightness){mutableFloatStateOf((state.brightness?:50).toFloat())}
         Section("亮度 · ${brightness.roundToInt()}%") {
@@ -26,7 +28,7 @@ fun LampScreen(state:LampState?, enabled:Boolean, patch:(Array<Pair<String,Any>>
         var ct by remember(state.ct){mutableFloatStateOf((state.ct?:4000).toFloat())}
         Section("色温 · ${ct.roundToInt()} K") {
             Slider(ct,{ct=it},valueRange=2700f..5100f,enabled=ok&&enabled,onValueChangeFinished={patch(arrayOf("color_temperature" to ct.roundToInt()))})
-            Row(Modifier.fillMaxWidth(),horizontalArrangement=Arrangement.SpaceBetween){Text("2700K 暖");Text("5100K 冷")}
+            Row(Modifier.fillMaxWidth(),horizontalArrangement=Arrangement.SpaceBetween){Text("暖光");Text("冷光")}
         }
 
         Section("灯光模式") {
@@ -37,10 +39,10 @@ fun LampScreen(state:LampState?, enabled:Boolean, patch:(Array<Pair<String,Any>>
             }
         }
 
-        Section("来电默认状态") {
-            Text("Default 的确切固件行为等宿舍实机验证。",style=MaterialTheme.typography.bodySmall)
+        Section("通电后状态") {
+            Text("选择台灯重新通电后的默认状态。",style=MaterialTheme.typography.bodySmall)
             Row(Modifier.horizontalScroll(rememberScrollState()),horizontalArrangement=Arrangement.spacedBy(8.dp)) {
-                listOf(0 to "默认",1 to "来电开灯",2 to "来电关灯").forEach { (v,n) ->
+                listOf(0 to "保持默认",1 to "自动开灯",2 to "保持关闭").forEach { (v,n) ->
                     FilterChip(state.defaultPower==v,{patch(arrayOf("default_power_on_state" to v))},{Text(n)},enabled=ok&&enabled)
                 }
             }
@@ -56,8 +58,8 @@ fun LampScreen(state:LampState?, enabled:Boolean, patch:(Array<Pair<String,Any>>
         }
 
         var delay by remember(state.delayMinutes){mutableFloatStateOf((state.delayMinutes?:30).toFloat())}
-        Section("延时关灯") {
-            ToggleLine("启用延时",state.delayEnabled==true,ok&&enabled,state.delayRemain?.let{"剩余 $it 分钟"}){patch(arrayOf("delay_enabled" to it))}
+        Section("定时关灯") {
+            ToggleLine("开启定时",state.delayEnabled==true,ok&&enabled,state.delayRemain?.let{"剩余 $it 分钟"}){patch(arrayOf("delay_enabled" to it))}
             Text("${delay.roundToInt()} 分钟")
             Slider(delay,{delay=it},valueRange=1f..60f,enabled=ok&&enabled,onValueChangeFinished={patch(arrayOf("delay_minutes" to delay.roundToInt()))})
         }
@@ -66,18 +68,21 @@ fun LampScreen(state:LampState?, enabled:Boolean, patch:(Array<Pair<String,Any>>
         var rest by remember(state.restMinutes){mutableFloatStateOf((state.restMinutes?:5).toFloat())}
         var loops by remember(state.recycle){mutableFloatStateOf((state.recycle?:4).toFloat())}
         Section("专注模式") {
-            ToggleLine("启用专注",state.focusEnabled==true,ok&&enabled){patch(arrayOf("focus_enabled" to it))}
-            Text("专注 ${focus.roundToInt()} 分钟"); Slider(focus,{focus=it},valueRange=1f..90f,enabled=ok&&enabled,onValueChangeFinished={patch(arrayOf("focus_minutes" to focus.roundToInt()))})
-            Text("休息 ${rest.roundToInt()} 分钟"); Slider(rest,{rest=it},valueRange=1f..90f,enabled=ok&&enabled,onValueChangeFinished={patch(arrayOf("rest_minutes" to rest.roundToInt()))})
-            Text("循环 ${loops.roundToInt()} 次"); Slider(loops,{loops=it},valueRange=1f..60f,enabled=ok&&enabled,onValueChangeFinished={patch(arrayOf("recycle_number" to loops.roundToInt()))})
+            ToggleLine("开启专注模式",state.focusEnabled==true,ok&&enabled){patch(arrayOf("focus_enabled" to it))}
+            Text("专注 ${focus.roundToInt()} 分钟")
+            Slider(focus,{focus=it},valueRange=1f..90f,enabled=ok&&enabled,onValueChangeFinished={patch(arrayOf("focus_minutes" to focus.roundToInt()))})
+            Text("休息 ${rest.roundToInt()} 分钟")
+            Slider(rest,{rest=it},valueRange=1f..90f,enabled=ok&&enabled,onValueChangeFinished={patch(arrayOf("rest_minutes" to rest.roundToInt()))})
+            Text("循环 ${loops.roundToInt()} 次")
+            Slider(loops,{loops=it},valueRange=1f..60f,enabled=ok&&enabled,onValueChangeFinished={patch(arrayOf("recycle_number" to loops.roundToInt()))})
         }
 
-        Section("快捷动作") {
+        Section("快速调节") {
             Row(Modifier.horizontalScroll(rememberScrollState()),horizontalArrangement=Arrangement.spacedBy(8.dp)) {
-                OutlinedButton({action("brightness-down",10)},enabled=ok&&enabled){Text("亮度 -10")}
-                OutlinedButton({action("brightness-up",10)},enabled=ok&&enabled){Text("亮度 +10")}
-                OutlinedButton({action("color-temperature-down",500)},enabled=ok&&enabled){Text("色温 -500K")}
-                OutlinedButton({action("color-temperature-up",500)},enabled=ok&&enabled){Text("色温 +500K")}
+                OutlinedButton({action("brightness-down",10)},enabled=ok&&enabled){Text("调暗")}
+                OutlinedButton({action("brightness-up",10)},enabled=ok&&enabled){Text("调亮")}
+                OutlinedButton({action("color-temperature-down",500)},enabled=ok&&enabled){Text("更暖")}
+                OutlinedButton({action("color-temperature-up",500)},enabled=ok&&enabled){Text("更冷")}
             }
         }
     }
