@@ -37,8 +37,10 @@ fun DeviceHeader(title:String, detail:String?, available:Boolean, error:String?)
         Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement=Arrangement.spacedBy(3.dp)) {
             Text(title, style=MaterialTheme.typography.titleLarge, fontWeight=FontWeight.Bold)
             detail?.let { Text(it, style=MaterialTheme.typography.bodySmall) }
-            Text(if(available) "局域网在线" else "不可用", style=MaterialTheme.typography.labelLarge)
-            if(!available && !error.isNullOrBlank()) Text(error, style=MaterialTheme.typography.bodySmall)
+            Text(if(available) "在线" else "暂时离线", style=MaterialTheme.typography.labelLarge)
+            if(!available && !error.isNullOrBlank()) {
+                Text("正在等待设备恢复连接", style=MaterialTheme.typography.bodySmall)
+            }
         }
     }
 }
