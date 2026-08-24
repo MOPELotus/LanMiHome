@@ -23,20 +23,31 @@ internal data class W96dState(
     val scheduled: Boolean = false,
     val paused: Boolean = false,
     val power: Boolean? = null,
+    val gear: Int? = null,
     val speed: Int? = null,
     val natural: Boolean? = null,
     val turbo: Boolean? = null,
     val turboRemainingSeconds: Int? = null,
+    val turboTimeSeconds: Int? = null,
+    val timerRemainingSeconds: Int? = null,
+    val sleepDelaySeconds: Int? = null,
+    val gearDownMode: Int? = null,
+    val gearSpeeds: List<Int>? = null,
     val indicator: Boolean? = null,
     val batteryVoltageMv: Int? = null,
     val batteryCurrentMa: Int? = null,
     val batteryCapacityMwh: Long? = null,
     val vbusVoltageMv: Long? = null,
+    // Kept only so the parked Night Node source remains binary/source compatible.
+    // The HTML interpretation of this field was disproved by differential captures.
     val vbusCurrentMa: Int? = null,
     val chargeStatus: Int? = null,
     val motorCurrentMa: Int? = null,
     val motorVoltageMv: Int? = null,
+    // Same compatibility-only placeholder: FFD3[2:4] remains unknown.
     val motorBlocked: Boolean? = null,
+    val serialNumber: String? = null,
+    val firmwareVersion: String? = null,
     val error: String? = null,
     val updatedAt: String? = null,
 ) {
@@ -50,20 +61,29 @@ internal data class W96dState(
             scheduled = j.optBoolean("scheduled", false),
             paused = j.optBoolean("paused", false),
             power = j.boolOrNullW96d("power"),
+            gear = j.intOrNullW96d("gear"),
             speed = j.intOrNullW96d("speed"),
             natural = j.boolOrNullW96d("natural"),
             turbo = j.boolOrNullW96d("turbo"),
             turboRemainingSeconds = j.intOrNullW96d("turbo_remaining_seconds"),
+            turboTimeSeconds = j.intOrNullW96d("turbo_time_seconds"),
+            timerRemainingSeconds = j.intOrNullW96d("timer_remaining_seconds"),
+            sleepDelaySeconds = j.intOrNullW96d("sleep_delay_seconds"),
+            gearDownMode = j.intOrNullW96d("gear_down_mode"),
+            gearSpeeds = j.optJSONArray("gear_speeds")?.let { a ->
+                List(a.length()) { index -> a.optInt(index) }
+            },
             indicator = j.boolOrNullW96d("indicator"),
             batteryVoltageMv = j.intOrNullW96d("battery_voltage_mv"),
             batteryCurrentMa = j.intOrNullW96d("battery_current_ma"),
             batteryCapacityMwh = j.longOrNullW96d("battery_capacity_mwh"),
             vbusVoltageMv = j.longOrNullW96d("vbus_voltage_mv"),
-            vbusCurrentMa = j.intOrNullW96d("vbus_current_ma"),
+            // Intentionally do not ingest legacy vbus_current_ma / motor_blocked.
             chargeStatus = j.intOrNullW96d("charge_status"),
             motorCurrentMa = j.intOrNullW96d("motor_current_ma"),
             motorVoltageMv = j.intOrNullW96d("motor_voltage_mv"),
-            motorBlocked = j.boolOrNullW96d("motor_blocked"),
+            serialNumber = j.stringOrNullW96d("serial_number"),
+            firmwareVersion = j.stringOrNullW96d("firmware_version"),
             error = j.stringOrNullW96d("error"),
             updatedAt = j.stringOrNullW96d("updated_at"),
         )
@@ -89,53 +109,67 @@ internal object W96dPrefs {
     private const val KEY_NIGHT_URL = "night_url"
     private const val KEY_ADDRESS = "ble_address"
     private const val KEY_NODE_PAUSED = "node_paused"
+    private const val KEY_LAST_SPEED = "last_nonzero_speed"
+    private const val KEY_SERIAL = "device_serial"
+    private const val KEY_FIRMWARE = "device_firmware"
+
+    private fun prefs(context: Context) =
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
 
     fun environment(context: Context): W96dEnvironment {
-        val raw = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-            .getString(KEY_ENV, W96dEnvironment.SCHOOL.name)
+        val raw = prefs(context).getString(KEY_ENV, W96dEnvironment.SCHOOL.name)
         return runCatching { W96dEnvironment.valueOf(raw ?: "") }
             .getOrDefault(W96dEnvironment.SCHOOL)
     }
 
     fun setEnvironment(context: Context, value: W96dEnvironment) {
-        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-            .edit().putString(KEY_ENV, value.name).apply()
+        prefs(context).edit().putString(KEY_ENV, value.name).apply()
     }
 
-    fun outdoor(context: Context): Boolean =
-        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-            .getBoolean(KEY_OUTDOOR, false)
+    fun outdoor(context: Context): Boolean = prefs(context).getBoolean(KEY_OUTDOOR, false)
 
     fun setOutdoor(context: Context, value: Boolean) {
-        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-            .edit().putBoolean(KEY_OUTDOOR, value).apply()
+        prefs(context).edit().putBoolean(KEY_OUTDOOR, value).apply()
     }
 
     fun nightUrl(context: Context): String =
-        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-            .getString(KEY_NIGHT_URL, "")?.trim().orEmpty()
+        prefs(context).getString(KEY_NIGHT_URL, "")?.trim().orEmpty()
 
     fun setNightUrl(context: Context, value: String) {
-        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-            .edit().putString(KEY_NIGHT_URL, value.trim()).apply()
+        prefs(context).edit().putString(KEY_NIGHT_URL, value.trim()).apply()
     }
 
     fun bleAddress(context: Context): String =
-        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-            .getString(KEY_ADDRESS, "")?.trim().orEmpty()
+        prefs(context).getString(KEY_ADDRESS, "")?.trim().orEmpty()
 
     fun setBleAddress(context: Context, value: String) {
-        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-            .edit().putString(KEY_ADDRESS, value.trim()).apply()
+        prefs(context).edit().putString(KEY_ADDRESS, value.trim()).apply()
     }
 
-    fun nodePaused(context: Context): Boolean =
-        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-            .getBoolean(KEY_NODE_PAUSED, false)
+    fun nodePaused(context: Context): Boolean = prefs(context).getBoolean(KEY_NODE_PAUSED, false)
 
     fun setNodePaused(context: Context, value: Boolean) {
-        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-            .edit().putBoolean(KEY_NODE_PAUSED, value).apply()
+        prefs(context).edit().putBoolean(KEY_NODE_PAUSED, value).apply()
+    }
+
+    fun lastSpeed(context: Context): Int =
+        prefs(context).getInt(KEY_LAST_SPEED, 50).coerceIn(1, 100)
+
+    fun setLastSpeed(context: Context, value: Int) {
+        if (value in 1..100) prefs(context).edit().putInt(KEY_LAST_SPEED, value).apply()
+    }
+
+    fun serialNumber(context: Context): String? =
+        prefs(context).getString(KEY_SERIAL, null)?.takeIf(String::isNotBlank)
+
+    fun firmwareVersion(context: Context): String? =
+        prefs(context).getString(KEY_FIRMWARE, null)?.takeIf(String::isNotBlank)
+
+    fun rememberDeviceInfo(context: Context, serial: String?, firmware: String?) {
+        val edit = prefs(context).edit()
+        serial?.takeIf(String::isNotBlank)?.let { edit.putString(KEY_SERIAL, it) }
+        firmware?.takeIf(String::isNotBlank)?.let { edit.putString(KEY_FIRMWARE, it) }
+        edit.apply()
     }
 }
 
