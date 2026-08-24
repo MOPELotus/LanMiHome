@@ -50,9 +50,24 @@ internal fun W96dScreen(primaryBase: String) {
     var state by remember { mutableStateOf<W96dState?>(null) }
     var busy by remember { mutableStateOf(false) }
     var lastError by remember { mutableStateOf<String?>(null) }
-    var speedDraft by remember { mutableIntStateOf(50) }
+    var speedDraft by remember { mutableIntStateOf(W96dPrefs.lastSpeed(context)) }
     var forceOutdoorDialog by remember { mutableStateOf(false) }
     var pendingPermissionOutdoor by remember { mutableStateOf(false) }
+
+    fun acceptState(next: W96dState) {
+        state = next
+        if (next.power == true && next.speed != null && next.speed in 1..100) {
+            speedDraft = next.speed
+            W96dPrefs.setLastSpeed(context, next.speed)
+        }
+        if (next.serialNumber != null || next.firmwareVersion != null) {
+            W96dPrefs.rememberDeviceInfo(
+                context,
+                next.serialNumber,
+                next.firmwareVersion,
+            )
+        }
+    }
 
     fun remote(owner: W96dOwner): W96dRemoteClient = when (owner) {
         W96dOwner.ROUTER -> W96dRemoteClient(routerW96dBase(primaryBase))
@@ -78,8 +93,7 @@ internal fun W96dScreen(primaryBase: String) {
             W96dPrefs.setOutdoor(context, true)
             outdoor = true
             try {
-                state = ble.connect()
-                speedDraft = state?.speed ?: speedDraft
+                acceptState(ble.connect())
                 lastError = null
             } catch (_: Exception) {
                 W96dPrefs.setOutdoor(context, false)
@@ -142,13 +156,20 @@ internal fun W96dScreen(primaryBase: String) {
         scope.launch {
             busy = true
             try {
-                state = if (outdoor) {
-                    if (!hasW96dBlePermissions(context)) throw IllegalStateException("missing permission")
+                val next = if (outdoor) {
+                    if (!hasW96dBlePermissions(context)) {
+                        throw IllegalStateException("missing permission")
+                    }
                     ble.patch(key, value)
                 } else {
                     remote(w96dOwner(environment, false)).patch(key to value)
                 }
-                speedDraft = state?.speed ?: speedDraft
+                acceptState(next)
+                if (key == "speed") {
+                    (value as? Number)?.toInt()?.takeIf { it in 1..100 }?.let {
+                        W96dPrefs.setLastSpeed(context, it)
+                    }
+                }
                 lastError = null
             } catch (_: Exception) {
                 lastError = "操作未完成，请稍后重试"
@@ -164,15 +185,18 @@ internal fun W96dScreen(primaryBase: String) {
                 try {
                     val next = if (outdoor) {
                         if (!hasW96dBlePermissions(context)) {
-                            W96dState(owner = "phone")
+                            W96dState(
+                                owner = "phone",
+                                serialNumber = W96dPrefs.serialNumber(context),
+                                firmwareVersion = W96dPrefs.firmwareVersion(context),
+                            )
                         } else {
                             ble.connect()
                         }
                     } else {
                         remote(w96dOwner(environment, false)).state()
                     }
-                    state = next
-                    next.speed?.let { speedDraft = it }
+                    acceptState(next)
                     if (next.error == null) lastError = null
                 } catch (_: Exception) {
                     state = (state ?: W96dState()).copy(
@@ -196,6 +220,12 @@ internal fun W96dScreen(primaryBase: String) {
         outdoor -> "外出"
         environment == W96dEnvironment.HOME -> "家里"
         else -> "宿舍"
+    }
+    val controlsEnabled = !busy && current?.available == true
+    val batteryProfile = when (current?.batteryCapacityMwh) {
+        17_200L -> 4800
+        18_000L -> 5000
+        else -> null
     }
 
     Column(
@@ -262,7 +292,11 @@ internal fun W96dScreen(primaryBase: String) {
                     Text("正在自动重试，无需手动操作", style = MaterialTheme.typography.bodySmall)
                 }
                 lastError?.let {
-                    Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+                    Text(
+                        it,
+                        color = MaterialTheme.colorScheme.error,
+                        style = MaterialTheme.typography.bodySmall,
+                    )
                 }
             }
         }
@@ -270,8 +304,9 @@ internal fun W96dScreen(primaryBase: String) {
         Card(Modifier.fillMaxWidth()) {
             Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 Text("风扇控制", style = MaterialTheme.typography.titleMedium)
-                ToggleRow("电源", current?.power, !busy && current?.available == true) {
-                    command("power", it)
+                ToggleRow("电源", current?.power, controlsEnabled) { on ->
+                    if (on) command("speed", W96dPrefs.lastSpeed(context))
+                    else command("power", false)
                 }
                 Text("风速 $speedDraft%")
                 Slider(
@@ -280,33 +315,185 @@ internal fun W96dScreen(primaryBase: String) {
                     onValueChangeFinished = { command("speed", speedDraft) },
                     valueRange = 0f..100f,
                     steps = 99,
-                    enabled = !busy && current?.available == true,
+                    enabled = controlsEnabled,
                 )
-                ToggleRow("自然风", current?.natural, !busy && current?.available == true) {
+                ToggleRow("自然风", current?.natural, controlsEnabled) {
                     command("natural", it)
                 }
-                ToggleRow("Turbo 强劲模式", current?.turbo, !busy && current?.available == true) {
+                ToggleRow("Turbo 强劲模式", current?.turbo, controlsEnabled) {
                     command("turbo", it)
                 }
-                ToggleRow("指示灯", current?.indicator, !busy && current?.available == true) {
+                ToggleRow("灯光", current?.indicator, controlsEnabled) {
                     command("indicator", it)
                 }
-                current?.turboRemainingSeconds?.takeIf { it > 0 }?.let {
-                    Text("强劲模式剩余 ${it} 秒", style = MaterialTheme.typography.bodySmall)
+                current?.gear?.takeIf { it in 1..4 }?.let {
+                    Text("实体档位 ${it} 档", style = MaterialTheme.typography.bodySmall)
                 }
-                Text("风速支持 0–100% 无级调节。", style = MaterialTheme.typography.bodySmall)
+                current?.turboRemainingSeconds?.takeIf { it > 0 }?.let {
+                    Text("强劲模式剩余 ${durationText(it)}", style = MaterialTheme.typography.bodySmall)
+                }
+                Text("风速支持 0–100% 无级调节；重新开机时恢复上次使用的风速。", style = MaterialTheme.typography.bodySmall)
+            }
+        }
+
+        Card(Modifier.fillMaxWidth()) {
+            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text("定时关机", style = MaterialTheme.typography.titleMedium)
+                Text(
+                    current?.timerRemainingSeconds?.takeIf { it > 0 }?.let {
+                        "剩余 ${durationText(it)}"
+                    } ?: "当前未设置定时",
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedButton(enabled = controlsEnabled, onClick = { command("timer_seconds", 1800) }) {
+                        Text("30 分钟")
+                    }
+                    OutlinedButton(enabled = controlsEnabled, onClick = { command("timer_seconds", 3600) }) {
+                        Text("1 小时")
+                    }
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedButton(enabled = controlsEnabled, onClick = { command("timer_seconds", 14_400) }) {
+                        Text("4 小时")
+                    }
+                    OutlinedButton(enabled = controlsEnabled, onClick = { command("timer_seconds", 0) }) {
+                        Text("取消定时")
+                    }
+                }
             }
         }
 
         Card(Modifier.fillMaxWidth()) {
             Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text("设备状态", style = MaterialTheme.typography.titleMedium)
-                TelemetryRow("电池", voltageText(current?.batteryVoltageMv), currentText(current?.batteryCurrentMa))
+                TelemetryRow(
+                    "电池",
+                    voltageText(current?.batteryVoltageMv),
+                    currentText(current?.batteryCurrentMa),
+                )
+                current?.chargeStatus?.let {
+                    TelemetryRow("电池状态", if (it == 1) "充电中" else "放电中", "")
+                }
                 TelemetryRow("外部供电", voltageText(current?.vbusVoltageMv), "")
-                TelemetryRow("电机", voltageText(current?.motorVoltageMv), currentText(current?.motorCurrentMa))
-                TelemetryRow("电池容量", capacityText(current?.batteryCapacityMwh), "")
+                TelemetryRow(
+                    "电机",
+                    voltageText(current?.motorVoltageMv),
+                    currentText(current?.motorCurrentMa),
+                )
+                TelemetryRow("额定电池能量", capacityText(current?.batteryCapacityMwh), "")
                 current?.updatedAt?.let {
                     Text("最近更新 ${displayTime(it)}", style = MaterialTheme.typography.labelSmall)
+                }
+            }
+        }
+
+        Card(Modifier.fillMaxWidth()) {
+            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("设备信息", style = MaterialTheme.typography.titleMedium)
+                TelemetryRow(
+                    "序列号",
+                    current?.serialNumber ?: W96dPrefs.serialNumber(context) ?: "—",
+                    "",
+                )
+                TelemetryRow(
+                    "固件版本",
+                    current?.firmwareVersion ?: W96dPrefs.firmwareVersion(context) ?: "—",
+                    "",
+                )
+            }
+        }
+
+        Card(Modifier.fillMaxWidth()) {
+            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text("设备设置", style = MaterialTheme.typography.titleMedium)
+
+                Text("电池规格", style = MaterialTheme.typography.titleSmall)
+                Text(
+                    "用于匹配机内安装的 21700 电芯额定容量。",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedButton(
+                        enabled = controlsEnabled,
+                        onClick = { command("battery_profile", 4800) },
+                    ) {
+                        Text(if (batteryProfile == 4800) "✓ 4800 mAh" else "4800 mAh")
+                    }
+                    OutlinedButton(
+                        enabled = controlsEnabled,
+                        onClick = { command("battery_profile", 5000) },
+                    ) {
+                        Text(if (batteryProfile == 5000) "✓ 5000 mAh" else "5000 mAh")
+                    }
+                }
+                Text(
+                    when (batteryProfile) {
+                        4800 -> "当前参数：17.2 Wh"
+                        5000 -> "当前参数：18.0 Wh"
+                        else -> "当前参数：${capacityText(current?.batteryCapacityMwh)}"
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                )
+
+                HorizontalDivider()
+                Text("关机后蓝牙休眠", style = MaterialTheme.typography.titleSmall)
+                Text(
+                    sleepDelayText(current?.sleepDelaySeconds),
+                    style = MaterialTheme.typography.bodySmall,
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedButton(
+                        enabled = controlsEnabled,
+                        onClick = { command("sleep_delay_seconds", 0) },
+                    ) { Text("保持连接") }
+                    OutlinedButton(
+                        enabled = controlsEnabled,
+                        onClick = { command("sleep_delay_seconds", 300) },
+                    ) { Text("5 分钟") }
+                    OutlinedButton(
+                        enabled = controlsEnabled,
+                        onClick = { command("sleep_delay_seconds", 1800) },
+                    ) { Text("30 分钟") }
+                }
+
+                HorizontalDivider()
+                Text("Turbo 持续时间", style = MaterialTheme.typography.titleSmall)
+                Text(turboTimeText(current?.turboTimeSeconds), style = MaterialTheme.typography.bodySmall)
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedButton(
+                        enabled = controlsEnabled,
+                        onClick = { command("turbo_time_seconds", 0) },
+                    ) { Text("默认 199 秒") }
+                    OutlinedButton(
+                        enabled = controlsEnabled,
+                        onClick = { command("turbo_time_seconds", 60) },
+                    ) { Text("60 秒") }
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedButton(
+                        enabled = controlsEnabled,
+                        onClick = { command("turbo_time_seconds", 300) },
+                    ) { Text("5 分钟") }
+                    OutlinedButton(
+                        enabled = controlsEnabled,
+                        onClick = { command("turbo_time_seconds", 600) },
+                    ) { Text("10 分钟") }
+                }
+
+                HorizontalDivider()
+                ToggleRow(
+                    "减档时直接回到 0 档",
+                    current?.gearDownMode?.let { it == 1 },
+                    controlsEnabled,
+                ) {
+                    command("gear_down_mode", if (it) 1 else 0)
+                }
+                current?.gearSpeeds?.takeIf { it.size >= 4 }?.let {
+                    Text(
+                        "实体四档：${it.take(4).joinToString(" / ") { speed -> "$speed%" }}",
+                        style = MaterialTheme.typography.bodySmall,
+                    )
                 }
             }
         }
@@ -350,7 +537,7 @@ private fun ToggleRow(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.SpaceBetween,
     ) {
-        Column {
+        Column(Modifier.weight(1f)) {
             Text(label)
             if (value == null) Text("等待同步", style = MaterialTheme.typography.labelSmall)
         }
@@ -382,3 +569,26 @@ private fun capacityText(value: Long?): String =
 
 private fun displayTime(value: String): String =
     value.substringAfter('T', value).take(8).ifBlank { value }
+
+private fun durationText(seconds: Int): String {
+    val hours = seconds / 3600
+    val minutes = (seconds % 3600) / 60
+    val secs = seconds % 60
+    return buildList {
+        if (hours > 0) add("${hours}小时")
+        if (minutes > 0) add("${minutes}分钟")
+        if (secs > 0 || isEmpty()) add("${secs}秒")
+    }.joinToString("")
+}
+
+private fun sleepDelayText(seconds: Int?): String = when (seconds) {
+    null -> "等待同步"
+    0 -> "关机后保持蓝牙连接"
+    else -> "关机 ${durationText(seconds)} 后蓝牙休眠"
+}
+
+private fun turboTimeText(seconds: Int?): String = when (seconds) {
+    null -> "等待同步"
+    0 -> "当前使用默认 199 秒"
+    else -> "当前 ${durationText(seconds)}"
+}
