@@ -150,15 +150,22 @@ private class W96dNightHttpServer(
                     W96dPrefs.setNodePaused(context, true)
                     runBlocking { ble.disconnect() }
                     val s = W96dNightRuntime.get().copy(
-                        available = false, connected = false, paused = true,
-                        scheduled = isNightWindow(), error = null,
+                        available = false,
+                        connected = false,
+                        paused = true,
+                        scheduled = isNightWindow(),
+                        error = null,
                     )
                     W96dNightRuntime.set(s)
                     ownershipJson(s).put("ok", true)
                 }
                 "resume" -> {
                     W96dPrefs.setNodePaused(context, false)
-                    val s = W96dNightRuntime.get().copy(paused = false, scheduled = isNightWindow(), error = null)
+                    val s = W96dNightRuntime.get().copy(
+                        paused = false,
+                        scheduled = isNightWindow(),
+                        error = null,
+                    )
                     W96dNightRuntime.set(s)
                     ownershipJson(s).put("ok", true)
                 }
@@ -173,14 +180,23 @@ private class W96dNightHttpServer(
         val paused = W96dPrefs.nodePaused(context)
         if (!scheduled || paused) {
             val s = W96dNightRuntime.get().copy(
-                available = false, connected = false, scheduled = scheduled, paused = paused,
-                error = if (!scheduled) "10S is outside 23:00-06:00 ownership window" else "ownership released for outdoor mode",
+                available = false,
+                connected = false,
+                scheduled = scheduled,
+                paused = paused,
+                error = if (!scheduled) {
+                    "10S is outside 23:00-06:00 ownership window"
+                } else {
+                    "ownership released for outdoor mode"
+                },
             )
             W96dNightRuntime.set(s)
             return s
         }
         val s = runBlocking {
-            if (!hasW96dBlePermissions(context)) throw IllegalStateException("BLE permission required on Night Node")
+            if (!hasW96dBlePermissions(context)) {
+                throw IllegalStateException("BLE permission required on Night Node")
+            }
             ble.connect().asNightState()
         }
         W96dNightRuntime.set(s)
@@ -200,20 +216,35 @@ private class W96dNightHttpServer(
     )
 
     private fun stateJson(s: W96dState): JSONObject = JSONObject().apply {
-        put("available", s.available); put("connected", s.connected); put("name", s.name)
-        putNullable("address", s.address); put("owner", "night_node"); put("scheduled", s.scheduled); put("paused", s.paused)
-        putNullable("power", s.power); putNullable("speed", s.speed); putNullable("natural", s.natural)
-        putNullable("turbo", s.turbo); putNullable("turbo_remaining_seconds", s.turboRemainingSeconds)
-        putNullable("indicator", s.indicator); putNullable("battery_voltage_mv", s.batteryVoltageMv)
-        putNullable("battery_current_ma", s.batteryCurrentMa); putNullable("battery_capacity_mwh", s.batteryCapacityMwh)
-        putNullable("vbus_voltage_mv", s.vbusVoltageMv); putNullable("vbus_current_ma", s.vbusCurrentMa)
-        putNullable("charge_status", s.chargeStatus); putNullable("motor_current_ma", s.motorCurrentMa)
-        putNullable("motor_voltage_mv", s.motorVoltageMv); putNullable("motor_blocked", s.motorBlocked)
-        putNullable("error", s.error); putNullable("updated_at", s.updatedAt)
+        put("available", s.available)
+        put("connected", s.connected)
+        put("name", s.name)
+        putNullable("address", s.address)
+        put("owner", "night_node")
+        put("scheduled", s.scheduled)
+        put("paused", s.paused)
+        putNullable("power", s.power)
+        putNullable("speed", s.speed)
+        putNullable("natural", s.natural)
+        putNullable("turbo", s.turbo)
+        putNullable("turbo_remaining_seconds", s.turboRemainingSeconds)
+        putNullable("indicator", s.indicator)
+        putNullable("battery_voltage_mv", s.batteryVoltageMv)
+        putNullable("battery_current_ma", s.batteryCurrentMa)
+        putNullable("battery_capacity_mwh", s.batteryCapacityMwh)
+        putNullable("vbus_voltage_mv", s.vbusVoltageMv)
+        putNullable("charge_status", s.chargeStatus)
+        putNullable("motor_current_ma", s.motorCurrentMa)
+        putNullable("motor_voltage_mv", s.motorVoltageMv)
+        putNullable("error", s.error)
+        putNullable("updated_at", s.updatedAt)
     }
 
     private fun ownershipJson(s: W96dState) = JSONObject()
-        .put("owner", "night_node").put("scheduled", s.scheduled).put("paused", s.paused).put("connected", s.connected)
+        .put("owner", "night_node")
+        .put("scheduled", s.scheduled)
+        .put("paused", s.paused)
+        .put("connected", s.connected)
 
     private fun JSONObject.putNullable(key: String, value: Any?) {
         put(key, value ?: JSONObject.NULL)
@@ -221,7 +252,12 @@ private class W96dNightHttpServer(
 
     private fun respond(socket: Socket, status: Int, payload: JSONObject) {
         val data = payload.toString().toByteArray(Charsets.UTF_8)
-        val reason = when (status) { 200 -> "OK"; 400 -> "Bad Request"; 503 -> "Service Unavailable"; else -> "Error" }
+        val reason = when (status) {
+            200 -> "OK"
+            400 -> "Bad Request"
+            503 -> "Service Unavailable"
+            else -> "Error"
+        }
         val out = socket.getOutputStream()
         out.write("HTTP/1.1 $status $reason\r\n".toByteArray())
         out.write("Content-Type: application/json; charset=utf-8\r\n".toByteArray())
@@ -244,12 +280,22 @@ class W96dNightService : Service() {
 
     override fun onCreate() {
         super.onCreate()
-        val channel = NotificationChannel(W96D_NIGHT_CHANNEL, "LAN 米家 W96D 夜间节点", NotificationManager.IMPORTANCE_LOW)
+        val channel = NotificationChannel(
+            W96D_NIGHT_CHANNEL,
+            "LAN 米家 W96D 夜间节点",
+            NotificationManager.IMPORTANCE_LOW,
+        )
         getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
-        startForeground(W96D_NIGHT_NOTIFICATION_ID, notification("等待 23:00–06:00 控制窗口"))
+        startForeground(
+            W96D_NIGHT_NOTIFICATION_ID,
+            notification("等待 23:00–06:00 控制窗口"),
+        )
         wakeLock = getSystemService(PowerManager::class.java)
             .newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "LanMiHome:W96dNight")
-            .apply { setReferenceCounted(false); acquire() }
+            .apply {
+                setReferenceCounted(false)
+                acquire()
+            }
         ble = W96dGattClient(this)
         http = W96dNightHttpServer(W96D_NIGHT_PORT, this, ble).also { it.start() }
         worker = scope.launch { runLoop() }
@@ -263,20 +309,34 @@ class W96dNightService : Service() {
             val paused = W96dPrefs.nodePaused(this)
             try {
                 val s = if (scheduled && !paused && hasW96dBlePermissions(this)) {
-                    ble.connect().copy(owner = "night_node", scheduled = true, paused = false)
+                    ble.connect().copy(
+                        owner = "night_node",
+                        scheduled = true,
+                        paused = false,
+                    )
                 } else {
                     ble.disconnect()
                     W96dNightRuntime.get().copy(
-                        available = false, connected = false, owner = "night_node",
-                        scheduled = scheduled, paused = paused,
-                        error = if (!hasW96dBlePermissions(this)) "BLE permission required" else null,
+                        available = false,
+                        connected = false,
+                        owner = "night_node",
+                        scheduled = scheduled,
+                        paused = paused,
+                        error = if (!hasW96dBlePermissions(this)) {
+                            "BLE permission required"
+                        } else {
+                            null
+                        },
                     )
                 }
                 W96dNightRuntime.set(s)
             } catch (e: Exception) {
                 W96dNightRuntime.update {
                     it.copy(
-                        available = false, connected = false, scheduled = scheduled, paused = paused,
+                        available = false,
+                        connected = false,
+                        scheduled = scheduled,
+                        paused = paused,
                         error = "${e.javaClass.simpleName}: ${e.message}",
                     )
                 }
@@ -289,20 +349,28 @@ class W96dNightService : Service() {
                 s.error != null -> s.error
                 else -> "正在连接 W96D"
             } ?: "W96D"
-            getSystemService(NotificationManager::class.java).notify(W96D_NIGHT_NOTIFICATION_ID, notification(detail))
+            getSystemService(NotificationManager::class.java).notify(
+                W96D_NIGHT_NOTIFICATION_ID,
+                notification(detail),
+            )
             delay(if (scheduled) 2_000 else 10_000)
         }
     }
 
     private fun notification(text: String): Notification {
         val pending = PendingIntent.getActivity(
-            this, 0, Intent(this, MainActivity::class.java),
+            this,
+            0,
+            Intent(this, MainActivity::class.java),
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
         )
         return Notification.Builder(this, W96D_NIGHT_CHANNEL)
             .setSmallIcon(android.R.drawable.ic_dialog_info)
             .setContentTitle("LAN 米家 · W96D Night Owner")
-            .setContentText(text).setContentIntent(pending).setOngoing(true).build()
+            .setContentText(text)
+            .setContentIntent(pending)
+            .setOngoing(true)
+            .build()
     }
 
     override fun onDestroy() {
