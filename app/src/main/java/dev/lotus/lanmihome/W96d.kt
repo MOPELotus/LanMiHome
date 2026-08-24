@@ -146,8 +146,14 @@ internal object W96dPrefs {
         prefs(context).edit().putBoolean(KEY_NODE_PAUSED, value).apply()
     }
 
-    fun lastSpeed(context: Context): Int =
-        prefs(context).getInt(KEY_LAST_SPEED, 10).coerceIn(1, 100)
+    fun lastSpeedOrNull(context: Context): Int? {
+        val p = prefs(context)
+        if (!p.contains(KEY_LAST_SPEED)) return null
+        return p.getInt(KEY_LAST_SPEED, 15).takeIf { it in 1..100 }
+    }
+
+    fun lastSpeed(context: Context, fallback: Int = 15): Int =
+        lastSpeedOrNull(context) ?: fallback.coerceIn(1, 100)
 
     fun setLastSpeed(context: Context, value: Int) {
         if (value in 1..100) prefs(context).edit().putInt(KEY_LAST_SPEED, value).apply()
