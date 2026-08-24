@@ -26,11 +26,11 @@ fun ClientSensorScreen(server: SensorState?) {
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        Text("温湿度计", style = MaterialTheme.typography.headlineSmall)
+        Text("房间环境", style = MaterialTheme.typography.headlineSmall)
 
         Card(Modifier.fillMaxWidth()) {
             Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                Text("宿舍实时数据", style = MaterialTheme.typography.titleMedium)
+                Text("当前环境", style = MaterialTheme.typography.titleMedium)
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                     Column {
                         Text("温度", style = MaterialTheme.typography.labelMedium)
@@ -50,19 +50,17 @@ fun ClientSensorScreen(server: SensorState?) {
 
         Card(Modifier.fillMaxWidth()) {
             Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(7.dp)) {
-                Text("路由器 BLE 状态", style = MaterialTheme.typography.titleMedium)
-                Text(if (server?.available == true) "RAX3000M：测量数据新鲜" else "RAX3000M：暂无新测量")
-                server?.ageSeconds?.let { Text("最后有效测量：${it} 秒前") }
-                server?.rssi?.let { Text("BlueZ 接收 RSSI：$it dBm") }
-                server?.mac?.let { Text("温湿度计：$it") }
-                server?.receivedAt?.let { Text("服务端时间：$it") }
-                if ((server?.reports ?: 0) > 0) Text("有效测量帧：${server?.reports}")
+                Text("设备状态", style = MaterialTheme.typography.titleMedium)
+                Text(if (server?.available == true) "数据同步正常" else "等待新的测量数据")
+                server?.ageSeconds?.let { Text("上次更新：${it} 秒前") }
+                server?.rssi?.let { Text("信号强度：$it dBm") }
             }
         }
 
         Text(
-            "温湿度计由 RAX3000M 的 BlueZ 持续扫描并在路由器本地解密；本客户端只读取 LAN API，不申请蓝牙权限、不保存 BLE Key。",
+            "环境数据会由室内设备自动同步，手机无需保持蓝牙连接。",
             style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
     }
 }
