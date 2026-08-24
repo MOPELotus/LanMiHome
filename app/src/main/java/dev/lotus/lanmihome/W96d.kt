@@ -38,14 +38,9 @@ internal data class W96dState(
     val batteryCurrentMa: Int? = null,
     val batteryCapacityMwh: Long? = null,
     val vbusVoltageMv: Long? = null,
-    // Kept only so the parked Night Node source remains binary/source compatible.
-    // The HTML interpretation of this field was disproved by differential captures.
-    val vbusCurrentMa: Int? = null,
     val chargeStatus: Int? = null,
     val motorCurrentMa: Int? = null,
     val motorVoltageMv: Int? = null,
-    // Same compatibility-only placeholder: FFD3[2:4] remains unknown.
-    val motorBlocked: Boolean? = null,
     val serialNumber: String? = null,
     val firmwareVersion: String? = null,
     val error: String? = null,
@@ -78,7 +73,6 @@ internal data class W96dState(
             batteryCurrentMa = j.intOrNullW96d("battery_current_ma"),
             batteryCapacityMwh = j.longOrNullW96d("battery_capacity_mwh"),
             vbusVoltageMv = j.longOrNullW96d("vbus_voltage_mv"),
-            // Intentionally do not ingest legacy vbus_current_ma / motor_blocked.
             chargeStatus = j.intOrNullW96d("charge_status"),
             motorCurrentMa = j.intOrNullW96d("motor_current_ma"),
             motorVoltageMv = j.intOrNullW96d("motor_voltage_mv"),
