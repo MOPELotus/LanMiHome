@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 from http import HTTPStatus
+import logging
 import re
 import threading
 from typing import Protocol
+
+LOG = logging.getLogger("lanmihome.light-strip")
 
 
 class LightStripUnavailable(RuntimeError):
@@ -86,7 +89,8 @@ class LightStripAdapter:
                     raise ValueError("device state must contain power and brightness")
                 return dict(state, **values, available=True, control_ready=True, status="ready", setup_required=False,
                             firmware=getattr(self._transport, "firmware", None), mode=getattr(self._transport, "mode", None))
-            except Exception:
+            except Exception as error:
+                LOG.warning("state unavailable: %s: %s", type(error).__name__, error)
                 return dict(state, status="offline", setup_required=False, error="light-strip-state-unavailable")
 
     @staticmethod

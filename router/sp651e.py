@@ -83,7 +83,10 @@ class SP651ETransport:
         device = await asyncio.wait_for(self.runtime._resolve_device(self.address), timeout=2)
         if device is None or getattr(device, "name", None) != "SP651E":
             raise ConnectionError("SP651E is not in the shared scanner cache")
-        lease = await asyncio.wait_for(self.acquire(), timeout=4)
+        try:
+            lease = await asyncio.wait_for(self.acquire(), timeout=9)
+        except asyncio.TimeoutError as error:
+            raise ConnectionError("shared BLE setup gate is busy") from error
         client = None
         try:
             client = BleakClient(device, timeout=6)
