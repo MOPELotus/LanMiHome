@@ -23,6 +23,7 @@ from miio.integrations.genericmiot.genericmiot import GenericMiot
 from lanmihome_cuktech import ChargerConfig, ChargerManager
 from lanmihome_cuktech.miot import MiotResult
 from lanmihome_cuktech.protocol import LANGUAGES, SCENE_MODES, SCREEN_TIMEOUTS
+from light_strip import LightStripAdapter, LightStripUnavailable
 
 LOG = logging.getLogger("lanmihome")
 FE95_UUID = "0000fe95-0000-1000-8000-00805f9b34fb"
@@ -1014,6 +1015,7 @@ class LanMiHomeApp:
         self.config = config
         self.fan = FanAdapter("fan", _device_config(config, "fan"))
         self.lamp = LampAdapter("lamp", _device_config(config, "lamp"))
+        self.light_strip = LightStripAdapter(_device_config(config, "light_strip"))
         self.sensor = SensorStore(config.get("sensor", {}))
         charger_cfg = self._charger_configs(config.get("chargers", []))
         self.ble = BleRuntime(self.sensor, charger_cfg)
@@ -1073,11 +1075,12 @@ class LanMiHomeApp:
             "api": "v1",
             "fan": self.fan.enabled,
             "lamp": self.lamp.enabled,
+            "light_strip": self.light_strip.capabilities(),
             "sensor": self.sensor.enabled,
             "chargers": [item["name"] for item in self.ble.snapshots()],
             "features": [
                 "fan", "lamp", "sensor", "charger", "recovery", "raw-miot",
-                "bluez-shared-scan", "cuktech-multi-device",
+                "bluez-shared-scan", "cuktech-multi-device", "light-strip-preparation",
             ],
         }
 
@@ -1085,6 +1088,7 @@ class LanMiHomeApp:
         return {
             "fan": self.fan.state(),
             "lamp": self.lamp.state(),
+            "light_strip": self.light_strip.state(),
             "sensor": self.sensor.snapshot(),
             "chargers": self.ble.snapshots(),
             "recovery": self.recovery.snapshot(),
@@ -1158,6 +1162,8 @@ class Handler(BaseHTTPRequestHandler):
             self._json(HTTPStatus.OK, result)
         except ApiError as exc:
             self._json(exc.status, {"error": str(exc)})
+        except LightStripUnavailable as exc:
+            self._json(exc.status, {"error": str(exc)})
         except (ValueError, KeyError) as exc:
             self._json(HTTPStatus.BAD_REQUEST, {"error": str(exc)})
         except (ConnectionError, TimeoutError, OSError) as exc:
@@ -1178,6 +1184,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self.app.fan.state()
             if path == "/api/v1/lamp":
                 return self.app.lamp.state()
+            if path == "/api/v1/light-strip":
+                return self.app.light_strip.state()
             if path == "/api/v1/sensor":
                 return self.app.sensor.snapshot()
             if path == "/api/v1/chargers":
@@ -1193,6 +1201,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self.app.fan.patch(body)
             if path == "/api/v1/lamp":
                 return self.app.lamp.patch(body)
+            if path == "/api/v1/light-strip":
+                return self.app.light_strip.patch(body)
             parts = self._parts(path)
             if len(parts) == 4 and parts[:3] == ["api", "v1", "charger"]:
                 return self.app.ble.patch(parts[3], body)
@@ -1278,6 +1288,7 @@ def main() -> int:
             "ok": True,
             "fan": app.fan.enabled,
             "lamp": app.lamp.enabled,
+            "light_strip": app.light_strip.capabilities(),
             "sensor": app.sensor.enabled,
             "chargers": [item["name"] for item in app.ble.snapshots()],
         }, ensure_ascii=False))

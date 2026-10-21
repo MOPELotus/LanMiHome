@@ -9,7 +9,27 @@ permissions:
   contents: read
 
 jobs:
+  test-backend:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install backend test dependencies
+        run: python -m pip install -r router/requirements-test.txt
+      - name: Test light-strip API and safety boundaries
+        run: python -m unittest discover -s router/tests -v
+      - name: Test existing CUKTECH BLE behavior
+        env:
+          PYTHONPATH: tools/cuktech_ble_probe/src
+        run: python -m unittest discover -s tools/cuktech_ble_probe/tests -v
+
   build:
+    needs: test-backend
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:

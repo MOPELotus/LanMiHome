@@ -56,6 +56,7 @@ for required in \
     "$SRC/router/lanmihome.py" \
     "$SRC/router/lanmihome_coordinated.py" \
     "$SRC/router/recovery_supervisor.py" \
+    "$SRC/router/light_strip.py" \
     "$SRC/router/lanmihome.init" \
     "$SRC/router/config.example.json" \
     "$SRC/tools/cuktech_ble_probe/src/lanmihome_cuktech/__init__.py"; do
@@ -79,13 +80,14 @@ for svc in /etc/init.d/*; do
 done
 
 # Back up the old backend and local configuration without printing any secret.
-for file in lanmihome.py lanmihome_coordinated.py recovery_supervisor.py config.json config.example.json; do
+for file in lanmihome.py lanmihome_coordinated.py recovery_supervisor.py light_strip.py config.json config.example.json; do
     [ -f "$BASE/$file" ] && cp -p "$BASE/$file" "$BACKUP/$file"
 done
 
 cp "$SRC/router/lanmihome.py" "$BASE/lanmihome.py"
 cp "$SRC/router/lanmihome_coordinated.py" "$BASE/lanmihome_coordinated.py"
 cp "$SRC/router/recovery_supervisor.py" "$BASE/recovery_supervisor.py"
+cp "$SRC/router/light_strip.py" "$BASE/light_strip.py"
 cp "$SRC/router/config.example.json" "$BASE/config.example.json"
 rm -rf "$BASE/lanmihome_cuktech"
 cp -a "$SRC/tools/cuktech_ble_probe/src/lanmihome_cuktech" "$BASE/lanmihome_cuktech"

@@ -90,6 +90,8 @@ PATCH /api/v1/fan
 POST  /api/v1/fan/action
 GET   /api/v1/lamp
 PATCH /api/v1/lamp
+GET   /api/v1/light-strip
+PATCH /api/v1/light-strip
 POST  /api/v1/lamp/action
 GET   /api/v1/sensor
 POST  /api/v1/sensor/report
@@ -97,6 +99,8 @@ GET   /api/v1/system/recovery
 POST  /api/v1/system/recovery/start
 POST  /api/v1/raw/{fan|lamp}/{get|set|action}
 ```
+
+The light-strip routes are a disabled-by-default SP651E preparation interface, not a verified hardware driver. See [SP651E setup and validation](../docs/SP651E.md) before enabling or deploying it.
 
 Router-native charger endpoints:
 

@@ -1,0 +1,3 @@
+bleak>=0.21
+cryptography>=41
+python-miio @ git+https://github.com/rytilahti/python-miio.git@9a00e0888ef85f8d8d84888cabd9e46d1b0a18df
