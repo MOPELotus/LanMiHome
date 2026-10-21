@@ -42,6 +42,14 @@ class LightStripAdapter:
         with self._lock:
             self._transport = transport
 
+    def start(self) -> None:
+        if self.enabled and hasattr(self._transport, "start"):
+            self._transport.start()
+
+    def close(self) -> None:
+        if hasattr(self._transport, "close"):
+            self._transport.close()
+
     def capabilities(self) -> dict:
         return {
             "model": self.model,

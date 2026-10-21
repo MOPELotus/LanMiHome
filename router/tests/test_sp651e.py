@@ -91,11 +91,13 @@ class FakeClient:
         self.status = bytearray(self.initial)
         self.commands = []
         self.disconnected = False
+        self.is_connected = False
         self.instances.append(self)
 
     async def connect(self, **kwargs):
         if self.fail_connect:
             raise ConnectionError('test connection failure')
+        self.is_connected = True
 
     async def start_notify(self, uuid, callback):
         self.callback = callback
@@ -115,6 +117,7 @@ class FakeClient:
 
     async def disconnect(self):
         self.disconnected = True
+        self.is_connected = False
         if self.disconnect_error:
             raise OSError('test disconnect failure')
 
@@ -146,11 +149,14 @@ class TransportTests(unittest.IsolatedAsyncioTestCase):
         self.mock.start()
         self.addCleanup(self.mock.stop)
 
+    async def asyncTearDown(self):
+        await self.transport._shutdown()
+
     async def test_read_never_sends_control_or_pairing(self):
         state = await self.transport._operate(None)
         self.assertTrue(state['power'])
         self.assertEqual([command[1] for command in FakeClient.instances[0].commands], [2])
-        self.assertTrue(FakeClient.instances[0].disconnected)
+        self.assertFalse(FakeClient.instances[0].disconnected)
         self.assertEqual(self.gate, ['acquired', 'released'])
 
     async def test_dimming_is_confirmed_in_static_mode(self):
@@ -185,8 +191,9 @@ class TransportTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_disconnect_failure_still_releases_gate(self):
         FakeClient.disconnect_error = True
+        FakeClient.ignore_write = True
         with self.assertRaises(OSError):
-            await self.transport._operate(None)
+            await self.transport._operate({'power': False})
         self.assertEqual(self.gate[-1], 'released')
 
     async def test_wrong_device_never_acquires_or_connects(self):
@@ -205,6 +212,7 @@ class TransportTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([command[1] for command in FakeClient.instances[0].commands], [2])
 
     async def test_sync_read_uses_shared_loop_and_cache(self):
+        await self.transport._poll_once()
         first = await asyncio.to_thread(self.transport.read_state)
         second = await asyncio.to_thread(self.transport.read_state)
         self.assertEqual(first, second)
@@ -212,10 +220,49 @@ class TransportTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.transport.firmware, 'V3020.07')
 
     async def test_sync_write_invalidates_old_cache(self):
-        await asyncio.to_thread(self.transport.read_state)
+        await self.transport._poll_once()
         await asyncio.to_thread(self.transport.set_state, {'power': False})
         self.assertFalse((await asyncio.to_thread(self.transport.read_state))['power'])
+        self.assertEqual(len(FakeClient.instances), 1)
+
+    async def test_get_before_background_report_does_not_connect(self):
+        with self.assertRaises(ConnectionError):
+            self.transport.read_state()
+        self.assertEqual(FakeClient.instances, [])
+
+    async def test_repeated_polls_reuse_connection_and_release_setup_lock(self):
+        await self.transport._poll_once()
+        await self.transport._poll_once()
+        self.assertEqual(len(FakeClient.instances), 1)
+        self.assertEqual(self.gate, ['acquired', 'released'])
+
+    async def test_remote_notification_updates_cached_state(self):
+        await self.transport._poll_once()
+        changed = bytearray(STATUS)
+        changed[29] = 0
+        FakeClient.instances[0].callback(0, bytes(changed))
+        self.assertFalse(self.transport.read_state()['power'])
+
+    async def test_shutdown_disconnects_persistent_session(self):
+        await self.transport._poll_once()
+        await self.transport._shutdown()
+        self.assertTrue(FakeClient.instances[0].disconnected)
+
+    async def test_background_poll_start_is_idempotent(self):
+        self.transport.start()
+        await asyncio.sleep(0.01)
+        worker = self.transport._worker
+        self.transport.start()
+        await asyncio.sleep(0.01)
+        self.assertIs(worker, self.transport._worker)
+        self.assertTrue(self.transport.read_state()['power'])
+
+    async def test_dropped_session_reconnects_on_next_poll(self):
+        await self.transport._poll_once()
+        FakeClient.instances[0].is_connected = False
+        await self.transport._poll_once()
         self.assertEqual(len(FakeClient.instances), 2)
+        self.assertEqual(self.gate, ['acquired', 'released', 'acquired', 'released'])
 
 
 if __name__ == '__main__':

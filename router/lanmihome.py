@@ -1053,9 +1053,11 @@ class LanMiHomeApp:
 
     def start(self) -> None:
         self.ble.start()
+        self.light_strip.start()
         self.recovery.maybe_start()
 
     def stop(self) -> None:
+        self.light_strip.close()
         self.ble.stop()
 
     def health(self) -> dict:

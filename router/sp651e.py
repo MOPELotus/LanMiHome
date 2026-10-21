@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import asyncio
 from concurrent.futures import TimeoutError as FutureTimeout
+import logging
 import time
 
 from bleak import BleakClient
 
 WRITE_UUID = "0000ffe1-0000-1000-8000-00805f9b34fb"
 VERIFIED_FIRMWARE = "V3020.07"
+LOG = logging.getLogger("lanmihome.sp651e")
 
 
 def frame(command: int, payload: bytes) -> bytes:
@@ -53,14 +55,63 @@ class SP651ETransport:
         self.mode = None
         self._cached = None
         self._updated = 0.0
+        self._client = None
+        self._queue = None
+        self._session_lock = None
+        self._worker = None
+
+    def start(self) -> None:
+        if self.runtime.loop is not None:
+            self.runtime.loop.call_soon_threadsafe(self._start_worker)
+
+    def _start_worker(self) -> None:
+        if self._worker is None or self._worker.done():
+            self._worker = asyncio.create_task(self._poll(), name="sp651e-poll")
+
+    async def _poll(self) -> None:
+        while True:
+            try:
+                await self._poll_once()
+            except asyncio.CancelledError:
+                raise
+            except Exception as error:
+                self._cached = None
+                LOG.warning("poll unavailable: %s: %s", type(error).__name__, error)
+            await asyncio.sleep(8)
+
+    async def _poll_once(self) -> None:
+        self._save(await self._operate(None))
+
+    def _save(self, state: dict) -> None:
+        self.firmware = state["firmware"]
+        self.mode = state["mode"]
+        self._cached = {key: state[key] for key in ("power", "brightness")}
+        self._updated = time.monotonic()
 
     def read_state(self) -> dict:
-        if self._cached is not None and time.monotonic() - self._updated < 8:
+        if self._cached is not None and time.monotonic() - self._updated < 20:
             return dict(self._cached)
-        return self._run(None)
+        raise ConnectionError("SP651E is waiting for a fresh device report")
 
     def set_state(self, changes: dict) -> None:
         self._run(changes)
+
+    def close(self) -> None:
+        loop = self.runtime.loop
+        if loop is not None and loop.is_running():
+            future = asyncio.run_coroutine_threadsafe(self._shutdown(), loop)
+            try:
+                future.result(timeout=5)
+            except FutureTimeout:
+                future.cancel()
+        self._cached = None
+
+    async def _shutdown(self) -> None:
+        if self._worker is not None:
+            self._worker.cancel()
+            await asyncio.gather(self._worker, return_exceptions=True)
+            self._worker = None
+        await self._disconnect()
 
     def _run(self, changes: dict | None) -> dict:
         loop = self.runtime.loop
@@ -73,13 +124,20 @@ class SP651ETransport:
         except FutureTimeout as error:
             future.cancel()
             raise TimeoutError("SP651E operation timed out") from error
-        self.firmware = state["firmware"]
-        self.mode = state["mode"]
-        self._cached = {key: state[key] for key in ("power", "brightness")}
-        self._updated = time.monotonic()
+        self._save(state)
         return dict(self._cached)
 
-    async def _operate(self, changes: dict | None) -> dict:
+    async def _disconnect(self) -> None:
+        client, self._client = self._client, None
+        self._queue = None
+        if client is not None:
+            await asyncio.wait_for(client.disconnect(), timeout=2)
+
+    async def _connect(self):
+        if self._client is not None and bool(self._client.is_connected):
+            return self._client
+        if self._client is not None:
+            await self._disconnect()
         device = await asyncio.wait_for(self.runtime._resolve_device(self.address), timeout=2)
         if device is None or getattr(device, "name", None) != "SP651E":
             raise ConnectionError("SP651E is not in the shared scanner cache")
@@ -88,44 +146,70 @@ class SP651ETransport:
         except asyncio.TimeoutError as error:
             raise ConnectionError("shared BLE setup gate is busy") from error
         client = None
+        connected = False
         try:
-            client = BleakClient(device, timeout=6)
+            client = BleakClient(device, timeout=12)
             await client.connect(dangerous_use_bleak_cache=True)
             queue = asyncio.Queue()
-            await client.start_notify(WRITE_UUID, lambda sender, data: queue.put_nowait(bytes(data)))
+            self._queue = queue
 
-            async def query():
-                while not queue.empty():
-                    queue.get_nowait()
-                await client.write_gatt_char(WRITE_UUID, frame(2, bytes([1])), response=True)
+            def received(sender, data):
+                packet = bytes(data)
+                queue.put_nowait(packet)
+                if self._client is client and packet[:2] == bytes([0x53, 2]):
+                    try:
+                        self._save(decode_status(packet))
+                    except ValueError:
+                        pass
 
-                async def receive():
-                    while True:
-                        packet = await queue.get()
-                        if packet[:2] == bytes([0x53, 2]):
-                            return decode_status(packet)
-
-                return await asyncio.wait_for(receive(), timeout=3)
-
-            current = await query()
-            if changes:
-                for command in control_frames(changes, current):
-                    await client.write_gatt_char(WRITE_UUID, command, response=True)
-                    await asyncio.sleep(0.15)
-                reported = await query()
-                if "power" not in changes and reported["power"] != current["power"]:
-                    await client.write_gatt_char(WRITE_UUID, frame(0x50, bytes([int(current["power"])])), response=True)
-                    reported = await query()
-                expected = dict(changes, power=changes.get("power", current["power"]))
-                if any(reported[key] != value for key, value in expected.items()):
-                    raise ConnectionError("SP651E command was not confirmed")
-                if "brightness" in changes and reported["mode"] != 2:
-                    raise ConnectionError("SP651E constant-light mode was not confirmed")
-                return reported
-            return current
+            await client.start_notify(WRITE_UUID, received)
+            self._client = client
+            connected = True
+            return client
         finally:
             try:
-                if client is not None:
+                if not connected and client is not None:
                     await asyncio.wait_for(client.disconnect(), timeout=2)
             finally:
                 await self.release(lease["token"])
+
+    async def _query(self, client) -> dict:
+        queue = self._queue
+        while not queue.empty():
+            queue.get_nowait()
+        await client.write_gatt_char(WRITE_UUID, frame(2, bytes([1])), response=True)
+
+        async def receive():
+            while True:
+                packet = await queue.get()
+                if packet[:2] == bytes([0x53, 2]):
+                    return decode_status(packet)
+
+        return await asyncio.wait_for(receive(), timeout=3)
+
+    async def _operate(self, changes: dict | None) -> dict:
+        if self._session_lock is None:
+            self._session_lock = asyncio.Lock()
+        async with self._session_lock:
+            try:
+                client = await self._connect()
+                current = await self._query(client)
+                if changes:
+                    for command in control_frames(changes, current):
+                        await client.write_gatt_char(WRITE_UUID, command, response=True)
+                        await asyncio.sleep(0.15)
+                    reported = await self._query(client)
+                    if "power" not in changes and reported["power"] != current["power"]:
+                        await client.write_gatt_char(WRITE_UUID, frame(0x50, bytes([int(current["power"])])), response=True)
+                        reported = await self._query(client)
+                    expected = dict(changes, power=changes.get("power", current["power"]))
+                    if any(reported[key] != value for key, value in expected.items()):
+                        raise ConnectionError("SP651E command was not confirmed")
+                    if "brightness" in changes and reported["mode"] != 2:
+                        raise ConnectionError("SP651E constant-light mode was not confirmed")
+                    return reported
+                return current
+            except BaseException:
+                self._cached = None
+                await self._disconnect()
+                raise
