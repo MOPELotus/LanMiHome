@@ -11,8 +11,8 @@ android {
         applicationId = "dev.lotus.lanmihome.client"
         minSdk = 26
         targetSdk = 36
-        versionCode = 16
-        versionName = "1.7.2"
+        versionCode = 17
+        versionName = "1.7.3"
         // Xiaomi 10S Night Node is parked. Keep the source code compiled so it
         // can be restored later without losing history, but expose no runtime entry.
         buildConfigField("boolean", "NIGHT_NODE_ENABLED", "false")

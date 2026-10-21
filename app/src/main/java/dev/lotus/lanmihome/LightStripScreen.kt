@@ -37,7 +37,7 @@ fun LightStripScreen(state: LightStripState?, enabled: Boolean, patch: (Array<Pa
             state.address?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
         }
         if (!state.available || !state.controlReady) {
-            Section("接入准备") {
+            Section("未连接说明") {
                 Text("设备未接入前，开关与亮度控制保持禁用，不会发送蓝牙指令。")
                 Text("路由器需配置 SP651E 的蓝牙地址和直接控制协议；当前已验证固件 V3020.07。无需米家或 BanlanX 绑定。")
                 Text("仅提供开关和亮度入口，不包含 RGB、色温或流水效果。")
