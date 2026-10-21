@@ -1,6 +1,5 @@
 package dev.lotus.lanmihome
 
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -63,10 +62,15 @@ fun LightStripScreen(state: LightStripState?, enabled: Boolean, patch: (Array<Pa
                 enabled = ready,
                 onValueChangeFinished = { patch(arrayOf("brightness" to brightness.roundToInt())) },
             )
-            Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                listOf(10, 25, 50, 75, 100).forEach { value ->
-                    OutlinedButton(onClick = { patch(arrayOf("brightness" to value)) }, enabled = ready) {
-                        Text("$value%")
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                listOf(25, 50, 75, 100).forEach { value ->
+                    OutlinedButton(
+                        onClick = { patch(arrayOf("brightness" to value)) },
+                        enabled = ready,
+                        modifier = Modifier.weight(1f),
+                        contentPadding = PaddingValues(horizontal = 0.dp),
+                    ) {
+                        Text("$value%", maxLines = 1)
                     }
                 }
             }
