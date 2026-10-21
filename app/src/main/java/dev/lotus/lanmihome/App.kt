@@ -18,7 +18,7 @@ import kotlinx.coroutines.sync.Mutex
 internal const val MAIN_PREFS = "lanmihome"
 internal const val DEFAULT_SERVER_URL = "http://10.0.0.1:8765"
 
-private enum class Tab { FAN, LAMP, SENSOR, CHARGER, W96D }
+private enum class Tab { FAN, LAMP, STRIP, SENSOR, CHARGER, W96D }
 private enum class BackendKind { PRIMARY, WIFI_GATEWAY }
 
 private data class BackendTarget(
@@ -81,6 +81,7 @@ fun LanMiHomeApp() {
     var tab by remember { mutableStateOf(Tab.FAN) }
     var fan by remember { mutableStateOf<FanState?>(null) }
     var lamp by remember { mutableStateOf<LampState?>(null) }
+    var lightStrip by remember { mutableStateOf<LightStripState?>(null) }
     var sensor by remember { mutableStateOf<SensorState?>(null) }
     var chargers by remember { mutableStateOf<List<ChargerState>?>(null) }
     var recovery by remember { mutableStateOf<RecoveryState?>(null) }
@@ -112,6 +113,7 @@ fun LanMiHomeApp() {
             when (tab) {
                 Tab.FAN -> fan = api.fan()
                 Tab.LAMP -> lamp = api.lamp()
+                Tab.STRIP -> lightStrip = api.lightStrip()
                 Tab.SENSOR -> sensor = api.sensor()
                 Tab.CHARGER -> chargers = api.chargers()
                 Tab.W96D -> Unit
@@ -141,6 +143,7 @@ fun LanMiHomeApp() {
             when (tab) {
                 Tab.FAN -> fan = FanState(false, lastError?.message)
                 Tab.LAMP -> lamp = LampState(false, lastError?.message)
+                Tab.STRIP -> lightStrip = LightStripState(status = "backend_unavailable", error = lastError?.message)
                 Tab.SENSOR -> sensor = null
                 Tab.CHARGER -> chargers = emptyList()
                 Tab.W96D -> Unit
@@ -220,6 +223,7 @@ fun LanMiHomeApp() {
             NavigationBar {
                 NavigationBarItem(tab == Tab.FAN, { tab = Tab.FAN }, icon = { Text("◉") }, label = { Text("风扇") })
                 NavigationBarItem(tab == Tab.LAMP, { tab = Tab.LAMP }, icon = { Text("●") }, label = { Text("台灯") })
+                NavigationBarItem(tab == Tab.STRIP, { tab = Tab.STRIP }, icon = { Text("━") }, label = { Text("灯带") })
                 NavigationBarItem(tab == Tab.SENSOR, { tab = Tab.SENSOR }, icon = { Text("⌁") }, label = { Text("环境") })
                 NavigationBarItem(tab == Tab.CHARGER, { tab = Tab.CHARGER }, icon = { Text("⚡") }, label = { Text("充电") })
                 NavigationBarItem(tab == Tab.W96D, { tab = Tab.W96D }, icon = { Text("◎") }, label = { Text("W96D") })
@@ -238,6 +242,11 @@ fun LanMiHomeApp() {
                     lamp, !busy,
                     patch = { pairs -> command { it.patchLamp(*pairs) } },
                     action = { n, v -> command { it.lampAction(n, v) } },
+                )
+                Tab.STRIP -> LightStripScreen(
+                    state = lightStrip,
+                    enabled = !busy,
+                    patch = { pairs -> command { it.patchLightStrip(*pairs) } },
                 )
                 Tab.SENSOR -> ClientSensorScreen(sensor)
                 Tab.CHARGER -> ChargerScreen(
@@ -265,6 +274,7 @@ fun LanMiHomeApp() {
                 consecutiveRefreshFailures = 0
                 fan = null
                 lamp = null
+                lightStrip = null
                 sensor = null
                 chargers = null
                 settings = false

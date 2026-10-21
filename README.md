@@ -10,4 +10,6 @@ W96D uses deterministic ownership: HOME and SCHOOL are router-owned 24h; OUTDOOR
 
 Router-side Xiaomi/BLE/CUKTECH secrets remain in router-local configuration. Android backup is disabled.
 
+The Android client also includes a disabled/unconfigured 「灯带」 page and router API contract for the single-color SP651E. Actual device transport remains pending hardware/protocol verification; see [`docs/SP651E.md`](docs/SP651E.md) for the exact scope and arrival checklist.
+
 See [`router/README.md`](router/README.md) for router deployment/recovery details and [`docs/W96D.md`](docs/W96D.md) for the W96D BLE channel.

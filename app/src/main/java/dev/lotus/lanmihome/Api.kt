@@ -51,6 +51,30 @@ data class LampState(
     ) }
 }
 
+data class LightStripState(
+    val available: Boolean = false,
+    val controlReady: Boolean = false,
+    val status: String = "not_configured",
+    val model: String = "SP651E",
+    val address: String? = null,
+    val power: Boolean? = null,
+    val brightness: Int? = null,
+    val error: String? = null,
+) {
+    companion object {
+        fun from(j: JSONObject) = LightStripState(
+            available = j.optBoolean("available", false),
+            controlReady = j.optBoolean("control_ready", false),
+            status = j.optString("status", "not_configured"),
+            model = j.optString("model", "SP651E"),
+            address = j.stringOrNull("address"),
+            power = j.boolOrNull("power"),
+            brightness = j.intOrNull("brightness"),
+            error = j.stringOrNull("error"),
+        )
+    }
+}
+
 data class SensorState(
     val available: Boolean,
     val temperature: Double? = null,
@@ -181,7 +205,7 @@ data class ChargerState(
     }
 }
 
-class ApiException(message:String): IOException(message)
+class ApiException(message:String, val statusCode: Int? = null): IOException(message)
 
 class LanMiHomeApi(rawBase: String) {
     val base = normalize(rawBase)
@@ -193,6 +217,12 @@ class LanMiHomeApi(rawBase: String) {
 
     suspend fun fan() = FanState.from(request("GET", "/api/v1/fan"))
     suspend fun lamp() = LampState.from(request("GET", "/api/v1/lamp"))
+    suspend fun lightStrip(): LightStripState = try {
+        LightStripState.from(request("GET", "/api/v1/light-strip"))
+    } catch (error: ApiException) {
+        if (error.statusCode != 404) throw error
+        LightStripState(status = "backend_unsupported")
+    }
     suspend fun sensor() = SensorState.from(request("GET", "/api/v1/sensor"))
     suspend fun recovery() = RecoveryState.from(request("GET", "/api/v1/system/recovery"))
 
@@ -204,6 +234,7 @@ class LanMiHomeApi(rawBase: String) {
 
     suspend fun patchFan(vararg pairs: Pair<String, Any>) = request("PATCH", "/api/v1/fan", obj(*pairs))
     suspend fun patchLamp(vararg pairs: Pair<String, Any>) = request("PATCH", "/api/v1/lamp", obj(*pairs))
+    suspend fun patchLightStrip(vararg pairs: Pair<String, Any>) = request("PATCH", "/api/v1/light-strip", obj(*pairs))
     suspend fun fanAction(name:String) = request("POST", "/api/v1/fan/action", obj("name" to name))
     suspend fun lampAction(name:String, value:Int?=null): JSONObject = request(
         "POST", "/api/v1/lamp/action", if(value==null) obj("name" to name) else obj("name" to name, "value" to value)
@@ -237,7 +268,7 @@ class LanMiHomeApi(rawBase: String) {
             val text = r.body.string()
             if(!r.isSuccessful) {
                 val detail = runCatching { JSONObject(text).optString("error") }.getOrDefault("")
-                throw ApiException("HTTP ${r.code}${if(detail.isBlank()) "" else ": $detail"}")
+                throw ApiException("HTTP ${r.code}${if(detail.isBlank()) "" else ": $detail"}", r.code)
             }
             if(text.isBlank()) JSONObject() else JSONObject(text)
         }
