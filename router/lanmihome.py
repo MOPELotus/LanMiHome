@@ -683,7 +683,7 @@ class BleRuntime:
 
     @property
     def needed(self) -> bool:
-        return self.sensor.enabled or bool(self.charger_cfg)
+        return self.sensor.enabled or bool(self.charger_cfg) or getattr(self, "light_strip_needed", False)
 
     def start(self) -> None:
         if not self.needed:
@@ -1019,6 +1019,7 @@ class LanMiHomeApp:
         self.sensor = SensorStore(config.get("sensor", {}))
         charger_cfg = self._charger_configs(config.get("chargers", []))
         self.ble = BleRuntime(self.sensor, charger_cfg)
+        self.ble.light_strip_needed = bool(self.light_strip.enabled and self.light_strip.address and self.light_strip.protocol == "banlanx-sp651e")
         self.recovery = RecoveryController(self.fan, config.get("recovery", {}))
         self.started_at = time.time()
 

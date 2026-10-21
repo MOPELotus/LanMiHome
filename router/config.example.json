@@ -4,6 +4,7 @@
   "light_strip": {
     "enabled": false,
     "model": "SP651E",
+    "protocol": "banlanx-sp651e",
     "address": ""
   },
   "devices": {

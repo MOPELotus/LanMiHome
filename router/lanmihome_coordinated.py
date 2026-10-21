@@ -8,6 +8,7 @@ import time
 
 import lanmihome as core
 from lanmihome_cuktech.controller import CuktechController
+from sp651e import SP651ETransport
 
 LOG = logging.getLogger("lanmihome.btcoord")
 _ACTIVE_BLE_RUNTIME = None
@@ -16,6 +17,7 @@ _ORIG_BLE_INIT = core.BleRuntime.__init__
 _ORIG_BLE_THREAD_MAIN = core.BleRuntime._thread_main
 _ORIG_BLE_ON_DETECT = core.BleRuntime._on_detect
 _ORIG_ROUTE = core.Handler._route
+_ORIG_APP_INIT = core.LanMiHomeApp.__init__
 _ORIG_CUKTECH_CONNECT = CuktechController.connect
 _ORIG_CUKTECH_AUTHENTICATE = CuktechController.authenticate
 _ORIG_CUKTECH_DISCONNECT = CuktechController.disconnect
@@ -355,6 +357,19 @@ def _patched_route(self, method: str, path: str, body: dict):
     return _ORIG_ROUTE(self, method, path, body)
 
 
+def _patched_app_init(self, config):
+    _ORIG_APP_INIT(self, config)
+    strip = self.light_strip
+    if strip.enabled and strip.address and strip.protocol == "banlanx-sp651e":
+        strip.attach_transport(SP651ETransport(
+            self.ble,
+            strip.address,
+            lambda: _acquire_external(self.ble, "sp651e", 25.0, True),
+            lambda token: _release_external(self.ble, token),
+        ))
+
+
+core.LanMiHomeApp.__init__ = _patched_app_init
 core.BleRuntime.__init__ = _patched_ble_init
 core.BleRuntime._thread_main = _patched_ble_thread_main
 core.BleRuntime._on_detect = _patched_ble_on_detect

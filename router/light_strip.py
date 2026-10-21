@@ -32,13 +32,19 @@ class LightStripAdapter:
         if self.address and not re.fullmatch(r"(?:[0-9A-F]{2}:){5}[0-9A-F]{2}", self.address):
             raise ValueError("light_strip.address must be a Bluetooth MAC address")
         self._transport = transport
+        self.protocol = str(config.get("protocol") or "pending")
         self._lock = threading.RLock()
+
+    def attach_transport(self, transport: LightStripTransport) -> None:
+        with self._lock:
+            self._transport = transport
 
     def capabilities(self) -> dict:
         return {
             "model": self.model,
             "enabled": self.enabled,
             "protocol_ready": self._transport is not None,
+            "protocol": self.protocol,
             "controls": ["power", "brightness"],
             "brightness_min": 1,
             "brightness_max": 100,
@@ -78,7 +84,8 @@ class LightStripAdapter:
                 values = self._validate_patch(reported)
                 if set(values) != {"power", "brightness"}:
                     raise ValueError("device state must contain power and brightness")
-                return dict(state, **values, available=True, control_ready=True, status="ready", setup_required=False)
+                return dict(state, **values, available=True, control_ready=True, status="ready", setup_required=False,
+                            firmware=getattr(self._transport, "firmware", None), mode=getattr(self._transport, "mode", None))
             except Exception:
                 return dict(state, status="offline", setup_required=False, error="light-strip-state-unavailable")
 

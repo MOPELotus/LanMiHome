@@ -100,7 +100,7 @@ POST  /api/v1/system/recovery/start
 POST  /api/v1/raw/{fan|lamp}/{get|set|action}
 ```
 
-The light-strip routes are a disabled-by-default SP651E preparation interface, not a verified hardware driver. See [SP651E setup and validation](../docs/SP651E.md) before enabling or deploying it.
+The light-strip routes support direct, unbound SP651E BLE control on verified firmware V3020.07 through the coordinated launcher. They remain disabled by default. See [SP651E setup and validation](../docs/SP651E.md) before enabling or deploying it.
 
 Router-native charger endpoints:
 
