@@ -114,6 +114,7 @@ class ProtocolTests(unittest.TestCase):
         writes = [call.args for call in self.client.request.call_args_list if call.args[0] == "POST"]
         self.assertEqual(len(writes), 2)
         for index, call in enumerate(writes, 1):
+            self.assertTrue(call[1].startswith("/set.cgi?"))
             self.assertIn("SetWifiCoverEnable", call[1])
             self.assertEqual(call[2], {"x.Enable": 0, "x.RadioInst": index, "y.Enable": 0, "x.X_HW_Token": "ExampleToken123"})
 

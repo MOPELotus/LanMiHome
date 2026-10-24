@@ -173,7 +173,7 @@ class ModemClient:
                 "y": domain,
                 "RequestFile": WLAN_PAGE.lstrip("/"),
             })
-            self.request("POST", "/html/amp/wlanbasic/set.cgi?" + query, {
+            self.request("POST", "/set.cgi?" + query, {
                 "x.Enable": int(enabled),
                 "x.RadioInst": int(domain.rsplit(".", 1)[1]),
                 "y.Enable": int(enabled),
