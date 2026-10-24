@@ -53,3 +53,15 @@ python -m unittest discover -s tools/modem_wifi_schedule/tests -v
 ```
 
 所有测试使用虚构数据，不连接真实设备。
+
+## 主网段免登录 Web 入口
+
+`modem_wifi_proxy.py` 提供独立的光猫后台代理，不依赖电脑 SSH 隧道。将 `cucc-index.html` 部署为 `/www/cucc/index.html`，访问路由器的 `/cucc` 后会跳转到同主机的 `18081` 端口。这样保留光猫旧界面的根路径、脚本、图片及 iframe，避免与 LuCI 冲突。
+
+在路由器私有配置中增加 `web_proxy`：`bind` 为主 LAN 的明确 IPv4 地址，`port` 为 `18081`，`allowed_networks` 仅含允许直接获得光猫超管权限的主网段，`allowed_hosts` 仅含路由器本地域名和主 LAN 地址。不使用 `0.0.0.0`，不允许访客网或校园 WAN。
+
+将 `modem-wifi-proxy.init` 安装至 `/etc/init.d/modem-wifi-proxy`，添加可执行权限后 enable/start。停用服务并删除 `/www/cucc` 入口即可撤回免登录访问，不影响已有定时任务。
+
+代理只在服务器内保存光猫凭据和认证 Cookie，不把凭据写入网页或重定向 URL。来源网段、Host、Origin 和跨站请求均校验；页面禁止被其他来源嵌入。浏览器访问的设备信息等仍属于超管权限数据，因此不要对不可信的主网段设备开放此服务。
+
+GET 会在光猫会话过期后重新登录；POST 不会在会话过期后自动重放，页面提示刷新后由用户重试。与定时控制共用操作锁，避免计划任务和页面操作同时修改无线设置。代理不自动修改任何光猫配置；只有用户在后台主动提交的请求才转发。
