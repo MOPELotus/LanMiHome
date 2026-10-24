@@ -172,7 +172,7 @@ class ModemClient:
                 "x": "InternetGatewayDevice.X_HW_DEBUG.AMP.SetWifiCoverEnable",
                 "y": domain,
                 "RequestFile": WLAN_PAGE.lstrip("/"),
-            })
+            }, safe="/.")
             self.request("POST", "/set.cgi?" + query, {
                 "x.Enable": int(enabled),
                 "x.RadioInst": int(domain.rsplit(".", 1)[1]),

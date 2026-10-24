@@ -115,6 +115,7 @@ class ProtocolTests(unittest.TestCase):
         self.assertEqual(len(writes), 2)
         for index, call in enumerate(writes, 1):
             self.assertTrue(call[1].startswith("/set.cgi?"))
+            self.assertIn("RequestFile=html/amp/wlanbasic/wlan.asp", call[1])
             self.assertIn("SetWifiCoverEnable", call[1])
             self.assertEqual(call[2], {"x.Enable": 0, "x.RadioInst": index, "y.Enable": 0, "x.X_HW_Token": "ExampleToken123"})
 
