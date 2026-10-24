@@ -27,6 +27,8 @@ jobs:
         env:
           PYTHONPATH: tools/cuktech_ble_probe/src
         run: python -m unittest discover -s tools/cuktech_ble_probe/tests -v
+      - name: Test modem Wi-Fi scheduling and control safety
+        run: python -m unittest discover -s tools/modem_wifi_schedule/tests -v
 
   build:
     needs: test-backend
