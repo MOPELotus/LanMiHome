@@ -106,6 +106,19 @@ class ProtocolTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             module.ModemClient({"host": "2001:db8::1", "interface": "example-wan"})
 
+    def test_raw_transport_preserves_binary_and_status(self):
+        response = MagicMock(status=404)
+        response.read.return_value = b"\x89PNG\x00\xff"
+        response.getheaders.return_value = [("Content-Type", "image/png")]
+        with patch.object(module.http.client, "HTTPConnection") as connection:
+            connection.return_value.getresponse.return_value = response
+            self.assertEqual(self.client.request_raw("GET", "/example.png"), (404, [("Content-Type", "image/png")], b"\x89PNG\x00\xff"))
+
+    def test_proxy_headers_cannot_override_backend_credentials_or_target(self):
+        for name in ("Host", "COOKIE", "Connection", "Content-Length"):
+            with self.assertRaises(ValueError):
+                self.client.request_raw("GET", "/", extra_headers={name: "untrusted"})
+
     @patch.object(module.time, "sleep")
     def test_two_radio_writes_only_change_enable_fields(self, sleep):
         self.client.radios = MagicMock(side_effect=[radio_state(), radio_state(False, True), radio_state(False, False), radio_state(False, False)])

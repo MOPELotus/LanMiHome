@@ -108,7 +108,7 @@ class ModemClient:
             stream.close()
             raise
 
-    def request(self, method, path, data=None):
+    def request_raw(self, method, path, body=None, extra_headers=None):
         origin = f"http://[{self.host}]"
         connection = http.client.HTTPConnection(self.host, 80, timeout=8)
         connection._create_connection = self._connect
@@ -120,24 +120,32 @@ class ModemClient:
             "Connection": "close",
             "Cookie": "; ".join(f"{name}={value}" for name, value in self.cookies.items()),
         }
-        body = None
-        if data is not None:
-            body = urllib.parse.urlencode(data)
-            headers["Content-Type"] = "application/x-www-form-urlencoded"
+        if extra_headers:
+            if any(name.lower() in {"host", "cookie", "connection", "content-length"} for name in extra_headers):
+                raise ValueError("Transport-owned headers cannot be overridden")
+            headers.update(extra_headers)
         try:
             connection.request(method, path, body=body, headers=headers)
             response = connection.getresponse()
             payload = response.read(1_000_001)
-            if response.status != 200 or len(payload) > 1_000_000:
+            if len(payload) > 1_000_000:
                 raise RuntimeError(f"Modem HTTP request failed: {response.status}")
             for name, value in response.getheaders():
                 if name.lower() == "set-cookie":
                     cookie_name, cookie_value = value.split(";", 1)[0].split("=", 1)
                     if re.fullmatch(r"[A-Za-z0-9_]+", cookie_name.strip()):
                         self.cookies[cookie_name.strip()] = cookie_value.strip()
-            return payload.decode("utf-8-sig", errors="replace")
+            return response.status, response.getheaders(), payload
         finally:
             connection.close()
+
+    def request(self, method, path, data=None):
+        body = None if data is None else urllib.parse.urlencode(data)
+        headers = {} if data is None else {"Content-Type": "application/x-www-form-urlencoded"}
+        status, response_headers, payload = self.request_raw(method, path, body, headers)
+        if status != 200:
+            raise RuntimeError(f"Modem HTTP request failed: {status}")
+        return payload.decode("utf-8-sig", errors="replace")
 
     def login(self):
         self.request("GET", "/CU.HTML")
