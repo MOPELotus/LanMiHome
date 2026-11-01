@@ -67,7 +67,8 @@ class TierTests(unittest.TestCase):
                       route={'final': 'main-out'}, experimental={'cache_file': {'enabled': True}})
         routes = copy.deepcopy(config['route'])
         patched = MODULE.patch_config(config, [node('cheap', '0.05')], 'test-only-secret', 19099)
-        self.assertEqual(patched['route'], routes)
+        self.assertEqual(patched['route']['final'], routes['final'])
+        self.assertEqual(patched['route']['rules'][0]['outbound'], 'cheap')
         self.assertEqual(patched['experimental']['clash_api']['external_controller'], '127.0.0.1:19099')
         main = next(item for item in patched['outbounds'] if item['tag'] == 'main-out')
         self.assertFalse(main['interrupt_exist_connections'])
@@ -122,11 +123,32 @@ class TierTests(unittest.TestCase):
 
             sections = {'config': dict(lotus_tiers_enabled='1', main_node='urltest')}
             with patch.object(MODULE, 'BASE', base), patch.object(MODULE, 'STATE', state), \
-                    patch.object(MODULE, 'read_uci', return_value=sections), patch.object(MODULE, 'api', side_effect=api):
+                    patch.object(MODULE, 'read_uci', return_value=sections), patch.object(MODULE, 'api', side_effect=api), \
+                    patch.object(MODULE, 'probe_node', side_effect=lambda item, settings, context:
+                                 (item['tag'], dict(delay=500 if item['tag'] == 'cheap' else 10, reason=None))):
                 MODULE.reconcile()
             self.assertEqual(changes, [('/proxies/lotus-rate-0_1', 'cheap'),
                                        ('/proxies/main-out', 'lotus-rate-0_1')])
             self.assertEqual(json.loads(state.read_text())['selected'], 'cheap')
+
+    def test_chatgpt_criterion_rejects_errors_and_challenges(self):
+        headers = {'content-type': 'text/html'}
+        valid = b'<html><title>ChatGPT</title><meta content="https://chatgpt.com"></html>'
+        self.assertIsNone(MODULE.chatgpt_response_reason(200, headers, valid))
+        self.assertEqual(MODULE.chatgpt_response_reason(403, headers, valid), 'HTTP_403')
+        self.assertEqual(MODULE.chatgpt_response_reason(200, headers,
+                         b'<html><title>Just a moment...</title>chatgpt.com</html>'), 'CHALLENGE')
+        self.assertEqual(MODULE.chatgpt_response_reason(200, headers,
+                         b'<html>chatgpt.com unsupported_country_region_territory</html>'), 'REGION_OR_ACCESS_DENIED')
+        self.assertEqual(MODULE.chatgpt_response_reason(200, headers, b'<html>some other site</html>'), 'NOT_CHATGPT_PAGE')
+
+    def test_probes_are_loopback_only_and_force_each_leaf(self):
+        config = dict(outbounds=[dict(tag='main-out', type='urltest'), dict(tag='cheap', type='anytls')])
+        patched = MODULE.patch_config(config, [node('cheap', '.1')], 'test-only', 19099)
+        self.assertEqual(patched['inbounds'][0]['listen'], '127.0.0.1')
+        self.assertEqual(patched['route']['rules'][0]['inbound'], ['lotus-probe-0'])
+        with self.assertRaises(ValueError):
+            MODULE.patch_config(config, [node('cheap', '.1')], 'test-only', 19099, probe_base_port=65536)
 
 
 if __name__ == '__main__':

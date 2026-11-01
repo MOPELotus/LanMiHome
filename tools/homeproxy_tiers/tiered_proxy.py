@@ -1,12 +1,14 @@
 import argparse
 import concurrent.futures
 from decimal import Decimal
+import http.client
 import json
 import os
 from pathlib import Path
 import re
 import shlex
 import subprocess
+import ssl
 import time
 import urllib.error
 import urllib.parse
@@ -108,10 +110,12 @@ def prepare_commands(settings, nodes):
     return commands
 
 
-def patch_config(config, nodes, secret, port, initial_selected=None):
+def patch_config(config, nodes, secret, port, initial_selected=None, probe_base_port=34000):
     if not nodes:
         raise ValueError('Empty proxy pool')
     nodes = sorted(nodes, key=lambda node: (Decimal(node['cost']), node['label']))
+    if not isinstance(probe_base_port, int) or not 1024 <= probe_base_port <= 65536 - len(nodes):
+        raise ValueError('Invalid probe port range')
     existing = {outbound['tag'] for outbound in config['outbounds']}
     if 'main-out' not in existing or any(node['tag'] not in existing for node in nodes):
         raise ValueError('Generated proxy pool does not match subscription')
@@ -127,6 +131,15 @@ def patch_config(config, nodes, secret, port, initial_selected=None):
                 default=tier_tag(initial['cost']), interrupt_exist_connections=False)
     config['outbounds'] = [outbound for outbound in config['outbounds']
                            if outbound['tag'] != 'main-out'] + replacements + [main]
+    probe_rules = []
+    for index, node in enumerate(nodes):
+        node['probe_port'] = probe_base_port + index
+        inbound = 'lotus-probe-' + str(index)
+        config.setdefault('inbounds', []).append(dict(type='http', tag=inbound,
+                                                     listen='127.0.0.1', listen_port=node['probe_port']))
+        probe_rules.append(dict(inbound=[inbound], action='route', outbound=node['tag']))
+    route = config.setdefault('route', {})
+    route['rules'] = probe_rules + route.get('rules', [])
     experimental = config.setdefault('experimental', {})
     if experimental.get('clash_api'):
         raise ValueError('Existing Clash controller must be preserved explicitly')
@@ -143,7 +156,8 @@ def finalize():
     previous = json.loads(STATE.read_text()) if STATE.exists() else {}
     config = patch_config(json.loads(GENERATED.read_text()), nodes,
                           settings['secret'], settings['port'],
-                          previous.get('selected', settings.get('bootstrap_tag')))
+                          previous.get('selected', settings.get('bootstrap_tag')),
+                          settings.get('probe_base_port', 34000))
     candidate = GENERATED.with_suffix('.tiers-candidate')
     try:
         atomic_json(candidate, config)
@@ -187,6 +201,68 @@ def select_node(nodes, delays, previous):
     return current
 
 
+def chatgpt_response_reason(status, headers, body):
+    if status != 200:
+        return 'HTTP_' + str(status)
+    text = body.decode('utf-8', errors='replace').lower()
+    if (headers.get('cf-mitigated', '').lower() == 'challenge'
+            or re.search(r'<title[^>]*>\s*(just a moment|attention required)', text)
+            or 'id="challenge-form"' in text):
+        return 'CHALLENGE'
+    if any(marker in text for marker in ['unsupported_country_region_territory',
+                                        'not available in your country', 'access denied']):
+        return 'REGION_OR_ACCESS_DENIED'
+    if 'text/html' not in headers.get('content-type', '').lower():
+        return 'NOT_HTML'
+    if '<html' not in text or 'chatgpt' not in text or not any(marker in text for marker in
+            ['chatgpt.com', '__next', '__reactrouter', 'openai']):
+        return 'NOT_CHATGPT_PAGE'
+    return None
+
+
+def probe_node(node, settings, context):
+    target = urllib.parse.urlsplit(settings['probe_url'])
+    if target.scheme != 'https' or target.hostname != 'chatgpt.com' or target.port not in (None, 443):
+        raise ValueError('Availability probe must target ChatGPT HTTPS')
+    started = time.monotonic()
+    connection = http.client.HTTPConnection('127.0.0.1', node['probe_port'], timeout=8)
+    stream = None
+    try:
+        connection.set_tunnel(target.hostname, 443)
+        connection.connect()
+        stream = context.wrap_socket(connection.sock, server_hostname=target.hostname)
+        connection.sock = None
+        path = urllib.parse.urlunsplit(('', '', target.path or '/', target.query, ''))
+        request = ('GET ' + path + ' HTTP/1.1\r\nHost: chatgpt.com\r\n'
+                   'User-Agent: Mozilla/5.0\r\nAccept: text/html\r\n'
+                   'Accept-Encoding: identity\r\nConnection: close\r\n\r\n')
+        stream.sendall(request.encode())
+        response = http.client.HTTPResponse(stream)
+        response.begin()
+        headers = {key.lower(): value for key, value in response.getheaders()}
+        body = bytearray()
+        reason = chatgpt_response_reason(response.status, headers, body)
+        deadline = started + 15
+        while reason == 'NOT_CHATGPT_PAGE' and len(body) < 131072:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError('ChatGPT response deadline')
+            stream.settimeout(min(8, remaining))
+            chunk = response.read1(min(65536, 131072 - len(body)))
+            if not chunk:
+                break
+            body.extend(chunk)
+            reason = chatgpt_response_reason(response.status, headers, body)
+        delay = max(1, round((time.monotonic() - started) * 1000)) if reason is None else None
+        return node['tag'], dict(delay=delay, reason=reason)
+    except (OSError, http.client.HTTPException) as error:
+        return node['tag'], dict(delay=None, reason=type(error).__name__)
+    finally:
+        if stream is not None:
+            stream.close()
+        connection.close()
+
+
 def locked_reconcile():
     import fcntl
     with Path('/var/lock/homeproxy-tiers.lock').open('a') as lock:
@@ -213,18 +289,10 @@ def reconcile():
     if actual_selected in {node['tag'] for node in nodes}:
         previous['selected'] = actual_selected
 
-    def probe(node):
-        query = urllib.parse.urlencode({'url': settings['probe_url'], 'timeout': 4000})
-        try:
-            result = api(settings, '/proxies/' + urllib.parse.quote(node['tag'], safe='') + '/delay?' + query)
-            delay = result.get('delay')
-            return node['tag'], delay if isinstance(delay, int) and delay > 0 else None
-        except (OSError, ValueError, urllib.error.URLError):
-            return node['tag'], None
-
+    context = ssl.create_default_context()
     with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:
-        measurements = dict(pool.map(probe, nodes))
-    delays = {tag: delay for tag, delay in measurements.items() if delay is not None}
+        measurements = dict(pool.map(lambda node: probe_node(node, settings, context), nodes))
+    delays = {tag: result['delay'] for tag, result in measurements.items() if result['delay'] is not None}
     streaks = {node['tag']: min(previous.get('streaks', {}).get(node['tag'], 0) + 1, 100)
                if node['tag'] in delays else 0 for node in nodes}
     previous['streaks'] = streaks
@@ -237,7 +305,8 @@ def reconcile():
     state = dict(updated_at=time.time(), selected=selection, healthy=bool(selected),
                  label=selected['label'] if selected else previous.get('label'),
                  cost=selected['cost'] if selected else previous.get('cost'),
-                 streaks=streaks, delays=delays, candidates=len(nodes))
+                 streaks=streaks, delays=delays, candidates=len(nodes),
+                 failures={tag: result['reason'] for tag, result in measurements.items() if result['reason']})
     atomic_json(STATE, state)
     if selection != previous.get('selected') or state['healthy'] != previous.get('healthy'):
         print(json.dumps(dict(event='tier_selection', label=state['label'],
@@ -251,7 +320,7 @@ def daemon():
             locked_reconcile()
         except Exception as error:
             print(json.dumps(dict(event='tier_probe_error', error=type(error).__name__)), flush=True)
-        time.sleep(max(5, 60 - (time.monotonic() - started)))
+        time.sleep(max(5, 120 - (time.monotonic() - started)))
 
 
 def main():
