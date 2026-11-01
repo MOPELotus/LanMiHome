@@ -81,6 +81,23 @@ class IntegrationTests(unittest.TestCase):
         self.assertIn('10.0.0.0/8', source)
         self.assertIn('fib daddr type local return', source)
 
+    def test_fixed_proxy_identity_does_not_balance_over_shared_line(self):
+        state = status([1, 2])
+        state['proxy_active'] = [1]
+        state['lines']['3']['enabled'] = False
+        source = MODULE.render_policy(state)
+        self.assertNotIn('numgen', source)
+        self.assertIn('ct mark set 0x4301 meta mark set 0x4101 counter', source)
+        self.assertNotIn('oifname "cwan3"', source)
+
+    def test_fixed_proxy_identity_never_borrows_shared_line(self):
+        state = status([2])
+        state['proxy_active'] = []
+        self.assertNotIn('ct mark set', MODULE.render_policy(state))
+        state['proxy_active'] = [1]
+        with self.assertRaises(ValueError):
+            MODULE.render_policy(state)
+
     def test_atomic_table_and_input_validation(self):
         self.assertTrue(MODULE.render_policy(status(), True).startswith('delete table ip lotus_proxy_multiwan\n'))
         invalid = status()

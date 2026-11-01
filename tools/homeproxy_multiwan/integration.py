@@ -134,9 +134,11 @@ def line_interfaces(status):
 
 def render_policy(status, exists=False):
     interfaces = line_interfaces(status)
-    active = sorted(set(status.get('active', [])))
+    active = sorted(set(status.get('proxy_active', status.get('active', []))))
     if any(identity not in interfaces for identity in active):
         raise ValueError('Unknown active identity')
+    if not set(active).issubset(status.get('active', [])):
+        raise ValueError('Proxy identity is not online')
     statements = ['delete table ip ' + TABLE] if exists else []
     statements.extend(['table ip ' + TABLE + ' {', ' chain output {',
                        ' type route hook output priority -140; policy accept;',
@@ -146,7 +148,10 @@ def render_policy(status, exists=False):
     for identity in (1, 2, 3):
         statements.append(f' ct mark {hex(0x4300 + identity)} meta mark set {hex(0x4100 + identity)} counter return')
     statements.extend([' ct mark != 0 return', ' ct state != new return'])
-    if active:
+    if len(active) == 1:
+        identity = active[0]
+        statements.append(f' ct mark set {hex(0x4300 + identity)} meta mark set {hex(0x4100 + identity)} counter')
+    elif active:
         mapping = '{ ' + ', '.join(f'{index} : {hex(0x4300 + identity)}'
                                   for index, identity in enumerate(active)) + ' }'
         statements.append(f' ct mark set numgen inc mod {len(active)} map {mapping} counter')
@@ -155,6 +160,8 @@ def render_policy(status, exists=False):
     statements.extend([' }', ' chain srcnat {',
                        ' type nat hook postrouting priority 98; policy accept;'])
     for identity, interface in sorted(interfaces.items()):
+        if status.get('lines', {}).get(str(identity), {}).get('enabled') is False:
+            continue
         statements.append(f' oifname "{interface}" ct mark {hex(0x4300 + identity)} counter masquerade')
     statements.extend([' }', '}'])
     return '\n'.join(statements) + '\n'
@@ -164,7 +171,10 @@ def reconcile():
     status = json.loads(RUNTIME.read_text())
     if time.time() - status['updated_at'] > 120:
         raise ValueError('Campus health state is stale')
-    signature = json.dumps([status['active'], line_interfaces(status)], sort_keys=True)
+    disabled = sorted(identity for identity, line in status.get('lines', {}).items()
+                      if line.get('enabled') is False)
+    signature = json.dumps([status['active'], status.get('proxy_active'),
+                            line_interfaces(status), disabled], sort_keys=True)
     exists = subprocess.run(['nft', 'list', 'table', 'ip', TABLE], capture_output=True).returncode == 0
     statefile = Path('/tmp/homeproxy-multiwan-state.json')
     previous = json.loads(statefile.read_text()) if statefile.exists() else {}

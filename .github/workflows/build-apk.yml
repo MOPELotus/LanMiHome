@@ -33,6 +33,8 @@ jobs:
         run: python -m unittest discover -s tools/homeproxy_tiers/tests -v
       - name: Test HomeProxy multi-WAN integration
         run: python -m unittest discover -s tools/homeproxy_multiwan/tests -v
+      - name: Test campus subnet isolation
+        run: python -m unittest discover -s tools/campus_multiwan/tests -v
 
   build:
     needs: test-backend
