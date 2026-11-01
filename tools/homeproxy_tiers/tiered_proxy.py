@@ -203,15 +203,26 @@ def select_node(nodes, delays, previous):
 
 def chatgpt_response_reason(status, headers, body):
     text = body.decode('utf-8', errors='replace').lower()
+    if any(marker in text for marker in ['unsupported_country_region_territory',
+                                        'unsupported country', 'not available in your country',
+                                        'country is not supported', 'ip has been blocked']):
+        return 'REGION_OR_ACCESS_DENIED'
+    if status >= 500:
+        return 'HTTP_' + str(status)
     if (headers.get('cf-mitigated', '').lower() == 'challenge'
             or re.search(r'<title[^>]*>\s*(just a moment|attention required)', text)
             or 'id="challenge-form"' in text):
-        return 'CHALLENGE'
+        return None
+    if status in (204, 401, 403):
+        return None
     if status != 200:
         return 'HTTP_' + str(status)
-    if any(marker in text for marker in ['unsupported_country_region_territory',
-                                        'not available in your country', 'access denied']):
-        return 'REGION_OR_ACCESS_DENIED'
+    if 'application/json' in headers.get('content-type', '').lower():
+        try:
+            json.loads(body)
+            return None
+        except (ValueError, UnicodeDecodeError):
+            return 'NOT_JSON'
     if 'text/html' not in headers.get('content-type', '').lower():
         return 'NOT_HTML'
     if '<html' not in text or 'chatgpt' not in text or not any(marker in text for marker in
@@ -240,10 +251,12 @@ def probe_node(node, settings, context):
         response = http.client.HTTPResponse(stream)
         response.begin()
         headers = {key.lower(): value for key, value in response.getheaders()}
-        body = bytearray()
+        body = bytearray(response.read1(16384))
         reason = chatgpt_response_reason(response.status, headers, body)
         deadline = started + 15
-        while reason == 'NOT_CHATGPT_PAGE' and len(body) < 131072:
+        while (reason in ('NOT_CHATGPT_PAGE', 'NOT_JSON') or (
+                response.status in (401, 403) and 'application/json' in headers.get('content-type', '').lower()
+                and not json_body_complete(body))) and len(body) < 131072:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 raise TimeoutError('ChatGPT response deadline')
@@ -254,13 +267,23 @@ def probe_node(node, settings, context):
             body.extend(chunk)
             reason = chatgpt_response_reason(response.status, headers, body)
         delay = max(1, round((time.monotonic() - started) * 1000)) if reason is None else None
-        return node['tag'], dict(delay=delay, reason=reason)
+        observation = ('CF_CHALLENGE_REACHABLE' if headers.get('cf-mitigated') == 'challenge'
+                       else 'HTTP_' + str(response.status) + '_REACHABLE') if reason is None else None
+        return node['tag'], dict(delay=delay, reason=reason, observation=observation)
     except (OSError, http.client.HTTPException) as error:
         return node['tag'], dict(delay=None, reason=type(error).__name__)
     finally:
         if stream is not None:
             stream.close()
         connection.close()
+
+
+def json_body_complete(body):
+    try:
+        json.loads(body)
+        return True
+    except (ValueError, UnicodeDecodeError):
+        return False
 
 
 def locked_reconcile():
@@ -307,7 +330,9 @@ def reconcile():
                  label=selected['label'] if selected else previous.get('label'),
                  cost=selected['cost'] if selected else previous.get('cost'),
                  streaks=streaks, delays=delays, candidates=len(nodes),
-                 failures={tag: result['reason'] for tag, result in measurements.items() if result['reason']})
+                 failures={tag: result['reason'] for tag, result in measurements.items() if result['reason']},
+                 responses={tag: result.get('observation') for tag, result in measurements.items()
+                            if result['delay'] is not None}, criterion='chatgpt_backend_reachable')
     atomic_json(STATE, state)
     if selection != previous.get('selected') or state['healthy'] != previous.get('healthy'):
         print(json.dumps(dict(event='tier_selection', label=state['label'],

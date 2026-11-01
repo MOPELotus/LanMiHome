@@ -9,17 +9,19 @@
 - 每两分钟一轮，最多同时四个探测，每次网络操作最多 8 秒；故障时选择仍可用的最低倍率。
 - 恢复低倍率需要连续两轮成功；同倍率至少快 50ms 且连续两轮成功才切换。
 - 已有连接不主动中断；全部失败保留最后选择，绝不回退为代理流量直连。
-- 唯一健康目标为 `https://chatgpt.com/`：需实际返回正常 ChatGPT HTML。
-  HTTP 错误、地区限制和识别到的验证页均不纳入可用池，不把 CDN trace 成功当作 GPT 可用。
-  验证页单独记为 `CHALLENGE`（自动检测无法确认），不据此断言浏览器一定不能使用该出口。
-  严格检测可能将需要浏览器验证的出口排除；不模拟验证码，不使用用户登录 Cookie。
-  这不能保证账号、模型额度、实际对话或 UDP 的可用性。
+- 健康目标为 `https://chatgpt.com/backend-api/models`，仅检测 ChatGPT 后端网络可达性。
+  证书校验通过且收到正常响应、401、403 或 Cloudflare 验证挑战均算可达；
+  明确的地区限制/封禁响应、连接错误和服务器错误仍排除，读取 JSON 响应以检查错误代码。
+  状态单独记录验证挑战、HTTP 状态，不把“网络可达”描述成“账号可用”或“已解锁”。
+  不模拟验证码，不使用用户登录 Cookie；不把仅访问 CDN trace 当作后端检测。
+  这是实测可请求的内部端点，不是 OpenAI 承诺稳定的官方健康 API。
+  这不能保证登录、模型额度、实际对话、地区是否在验证之后再次受限或 UDP 的可用性。
 
 ## 部署约定
 
 源文件部署到 `/lotusemmc/homeproxy-tiers`，目录权限 700。
 本机生成 `private.json`（600），包含随机 `secret`、空闲回环端口 `port` 和
-`probe_url`（固定 `https://chatgpt.com/`），不得提交。
+`probe_url`（`https://chatgpt.com/backend-api/models`），不得提交。
 
 完整备份 `/etc/config/homeproxy`、原生生成器和服务启用状态。
 保留原生生成器为 `/etc/homeproxy/scripts/generate_client.lotus-original.uc`，

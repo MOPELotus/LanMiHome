@@ -131,17 +131,28 @@ class TierTests(unittest.TestCase):
                                        ('/proxies/main-out', 'lotus-rate-0_1')])
             self.assertEqual(json.loads(state.read_text())['selected'], 'cheap')
 
-    def test_chatgpt_criterion_rejects_errors_and_challenges(self):
+    def test_chatgpt_criterion_accepts_authentication_and_verification(self):
         headers = {'content-type': 'text/html'}
         valid = b'<html><title>ChatGPT</title><meta content="https://chatgpt.com"></html>'
         self.assertIsNone(MODULE.chatgpt_response_reason(200, headers, valid))
-        self.assertEqual(MODULE.chatgpt_response_reason(403, headers, valid), 'HTTP_403')
-        self.assertEqual(MODULE.chatgpt_response_reason(403, {**headers, 'cf-mitigated': 'challenge'}, valid), 'CHALLENGE')
-        self.assertEqual(MODULE.chatgpt_response_reason(200, headers,
-                         b'<html><title>Just a moment...</title>chatgpt.com</html>'), 'CHALLENGE')
+        self.assertIsNone(MODULE.chatgpt_response_reason(403, headers, valid))
+        self.assertIsNone(MODULE.chatgpt_response_reason(403, {**headers, 'cf-mitigated': 'challenge'}, valid))
+        self.assertIsNone(MODULE.chatgpt_response_reason(401, {'content-type': 'application/json'}, b'{"error":"unauthorized"}'))
+        self.assertIsNone(MODULE.chatgpt_response_reason(200, headers,
+                          b'<html><title>Just a moment...</title>chatgpt.com</html>'))
         self.assertEqual(MODULE.chatgpt_response_reason(200, headers,
                          b'<html>chatgpt.com unsupported_country_region_territory</html>'), 'REGION_OR_ACCESS_DENIED')
         self.assertEqual(MODULE.chatgpt_response_reason(200, headers, b'<html>some other site</html>'), 'NOT_CHATGPT_PAGE')
+        self.assertEqual(MODULE.chatgpt_response_reason(403, {'content-type': 'application/json'},
+                         b'{"error":{"code":"unsupported_country_region_territory"}}'), 'REGION_OR_ACCESS_DENIED')
+        self.assertEqual(MODULE.chatgpt_response_reason(503, headers, b'Unavailable'), 'HTTP_503')
+
+    def test_backend_json_and_partial_response(self):
+        headers = {'content-type': 'application/json'}
+        self.assertIsNone(MODULE.chatgpt_response_reason(200, headers, b'{"models":[]}'))
+        self.assertEqual(MODULE.chatgpt_response_reason(200, headers, b'{"models":'), 'NOT_JSON')
+        self.assertFalse(MODULE.json_body_complete(b'{"error":'))
+        self.assertTrue(MODULE.json_body_complete(b'{"error":"unauthorized"}'))
 
     def test_probes_are_loopback_only_and_force_each_leaf(self):
         config = dict(outbounds=[dict(tag='main-out', type='urltest'), dict(tag='cheap', type='anytls')])
