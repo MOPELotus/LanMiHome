@@ -85,28 +85,29 @@ class HealthTests(unittest.TestCase):
             unrelated.write_text('unchanged')
             with patch.object(MODULE, 'RUNTIME', root / 'runtime'), patch.object(MODULE.subprocess, 'run') as runner:
                 self.assertTrue(MODULE.publish('cdn.example.com', ['1.1.1.1'], [root]))
-                self.assertEqual(runner.call_count, 2)
-                self.assertEqual(runner.call_args.args[0][1], 'restart')
+                self.assertEqual(runner.call_count, 1)
+                self.assertEqual(runner.call_args.args[0][1], 'reload')
                 runner.reset_mock()
                 self.assertFalse(MODULE.publish('cdn.example.com', ['1.1.1.1'], [root]))
                 runner.assert_not_called()
                 self.assertTrue(MODULE.publish('cdn.example.com', [], [root]))
                 self.assertEqual(runner.call_args.args[0][1], 'reload')
-                self.assertEqual((root / 'runtime' / 'hosts').read_text(), '')
-                self.assertTrue(MODULE.publish('', [], [root]))
+                self.assertFalse((root / MODULE.FRAGMENT).exists())
+                self.assertFalse(MODULE.publish('', [], [root]))
             self.assertFalse((root / MODULE.FRAGMENT).exists())
             self.assertEqual(unrelated.read_text(), 'unchanged')
 
-    def test_invalid_dnsmasq_candidate_does_not_replace_previous_pool(self):
+    def test_invalid_candidate_does_not_replace_previous_pool(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             path = root / MODULE.FRAGMENT
             path.write_text('original')
-            with patch.object(MODULE, 'RUNTIME', root / 'runtime'), patch.object(MODULE.subprocess, 'run', side_effect=RuntimeError('test failed')):
-                with self.assertRaises(RuntimeError):
-                    MODULE.publish('cdn.example.com', ['1.1.1.1'], [root])
+            with patch.object(MODULE.subprocess, 'run') as runner:
+                with self.assertRaises(ValueError):
+                    MODULE.publish('cdn.example.com', ['127.0.0.1'], [root])
+                runner.assert_not_called()
             self.assertEqual(path.read_text(), 'original')
-            self.assertFalse(path.with_name(path.name + '.new').exists())
+            self.assertFalse(path.with_name('.' + path.name + '.new').exists())
 
 
 if __name__ == '__main__':

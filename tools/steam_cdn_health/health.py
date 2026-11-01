@@ -15,7 +15,7 @@ import urllib.request
 
 BASE = Path('/lotusemmc/steam-cdn-health')
 RUNTIME = Path('/var/run/steam-cdn-health')
-FRAGMENT = 'lotus-steam-health.conf'
+FRAGMENT = 'lotus-steam-health'
 
 
 def public_address(value):
@@ -25,12 +25,16 @@ def public_address(value):
     return str(address)
 
 
-def validate_config(config):
-    domain = config['domain']
+def validate_domain(domain):
     if len(domain) > 253 or '.' not in domain or not all(
             re.fullmatch(r'[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?', label)
             for label in domain.split('.')):
         raise ValueError('Invalid exact CDN hostname')
+    return domain
+
+
+def validate_config(config):
+    validate_domain(config['domain'])
     config['seed_ips'] = sorted({public_address(value) for value in config['seed_ips']})
     if not 1 <= len(config['seed_ips']) <= 32:
         raise ValueError('Expected 1 to 32 seed addresses')
@@ -92,6 +96,8 @@ def update_health(previous, results):
 
 
 def dns_text(domain, addresses):
+    if domain:
+        validate_domain(domain)
     return ''.join(f'{public_address(address)} {domain}\n'
                    for address in sorted(set(addresses)))
 
@@ -100,54 +106,41 @@ def config_directories():
     directories = set()
     for path in Path('/tmp/etc').glob('dnsmasq.conf.*'):
         for row in path.read_text().splitlines():
-            if row.startswith('conf-dir='):
-                directory = Path(row.split('=', 1)[1].split(',', 1)[0])
-                if not directory.is_absolute():
-                    raise ValueError('DNS directory must be absolute')
-                directories.add(directory)
+            if row.startswith('addn-hosts='):
+                directory = Path(row.split('=', 1)[1])
+                if directory.is_absolute() and directory.is_dir():
+                    directories.add(directory)
     if not directories:
-        raise ValueError('No active dnsmasq directory')
+        raise ValueError('No native additional-hosts directory')
     return sorted(directories)
 
 
 def publish(domain, addresses, directories):
     content = dns_text(domain, addresses)
-    RUNTIME.mkdir(mode=0o700, parents=True, exist_ok=True)
-    hosts = RUNTIME / 'hosts'
     changed = False
-    config_changed = False
-    if not hosts.exists() or hosts.read_text() != content:
-        temporary = hosts.with_name('hosts.new')
-        descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-        with os.fdopen(descriptor, 'w') as stream:
-            stream.write(content)
-        os.replace(temporary, hosts)
-        changed = True
-    fragment = 'addn-hosts=' + str(hosts) + '\n' if domain else ''
     for directory in directories:
         path = directory / FRAGMENT
-        if not fragment:
+        if not content:
             if path.exists():
                 path.unlink()
-                config_changed = True
+                changed = True
             continue
-        if path.exists() and path.read_text() == fragment:
+        if path.exists() and path.read_text() == content:
             continue
-        temporary = path.with_name(path.name + '.new')
-        descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        temporary = path.with_name('.' + path.name + '.new')
+        descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o644)
         try:
             with os.fdopen(descriptor, 'w') as stream:
-                stream.write(fragment)
-            subprocess.run(['dnsmasq', '--test', '--conf-file=' + str(temporary)],
-                           check=True, capture_output=True, timeout=10)
+                stream.write(content)
+            os.chmod(temporary, 0o644)
             os.replace(temporary, path)
-            config_changed = True
+            changed = True
         finally:
             temporary.unlink(missing_ok=True)
-    if changed or config_changed:
-        subprocess.run(['/etc/init.d/dnsmasq', 'restart' if config_changed else 'reload'], check=True,
+    if changed:
+        subprocess.run(['/etc/init.d/dnsmasq', 'reload'], check=True,
                        capture_output=True, timeout=20)
-    return changed or config_changed
+    return changed
 
 
 def once():
