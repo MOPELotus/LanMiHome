@@ -202,13 +202,13 @@ def select_node(nodes, delays, previous):
 
 
 def chatgpt_response_reason(status, headers, body):
-    if status != 200:
-        return 'HTTP_' + str(status)
     text = body.decode('utf-8', errors='replace').lower()
     if (headers.get('cf-mitigated', '').lower() == 'challenge'
             or re.search(r'<title[^>]*>\s*(just a moment|attention required)', text)
             or 'id="challenge-form"' in text):
         return 'CHALLENGE'
+    if status != 200:
+        return 'HTTP_' + str(status)
     if any(marker in text for marker in ['unsupported_country_region_territory',
                                         'not available in your country', 'access denied']):
         return 'REGION_OR_ACCESS_DENIED'
@@ -286,8 +286,9 @@ def reconcile():
     previous = json.loads(STATE.read_text()) if STATE.exists() else {}
     current_group = proxies['main-out'].get('now')
     actual_selected = proxies.get(current_group, {}).get('now')
-    if actual_selected in {node['tag'] for node in nodes}:
-        previous['selected'] = actual_selected
+    actual_node = next((node for node in nodes if node['tag'] == actual_selected), None)
+    if actual_node is not None:
+        previous.update(selected=actual_selected, label=actual_node['label'], cost=actual_node['cost'])
 
     context = ssl.create_default_context()
     with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:

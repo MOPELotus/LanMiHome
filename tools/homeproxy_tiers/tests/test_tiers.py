@@ -136,6 +136,7 @@ class TierTests(unittest.TestCase):
         valid = b'<html><title>ChatGPT</title><meta content="https://chatgpt.com"></html>'
         self.assertIsNone(MODULE.chatgpt_response_reason(200, headers, valid))
         self.assertEqual(MODULE.chatgpt_response_reason(403, headers, valid), 'HTTP_403')
+        self.assertEqual(MODULE.chatgpt_response_reason(403, {**headers, 'cf-mitigated': 'challenge'}, valid), 'CHALLENGE')
         self.assertEqual(MODULE.chatgpt_response_reason(200, headers,
                          b'<html><title>Just a moment...</title>chatgpt.com</html>'), 'CHALLENGE')
         self.assertEqual(MODULE.chatgpt_response_reason(200, headers,
