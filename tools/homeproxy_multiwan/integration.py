@@ -176,11 +176,28 @@ def reconcile():
         print(json.dumps(dict(event='router_output_policy', active=status['active'])), flush=True)
 
 
+def firewall_generation():
+    result = subprocess.run(['nft', '-j', '-a', 'list', 'chain', 'inet', 'fw4', 'homeproxy_mangle_tun'],
+                            capture_output=True, text=True, timeout=10)
+    if result.returncode:
+        return None
+    for entry in json.loads(result.stdout).get('nftables', []):
+        rule = entry.get('rule', {})
+        if 'lotus_direct4' in json.dumps(rule.get('expr', [])):
+            return rule.get('handle')
+    return None
+
+
 def daemon():
     last_dns_check = 0
+    previous_generation = None
     while True:
         try:
             reconcile()
+            generation = firewall_generation()
+            if generation is not None and generation != previous_generation:
+                run(['/etc/init.d/dnsmasq', 'reload'])
+                previous_generation = generation
             if time.monotonic() - last_dns_check > 30:
                 if sync_dns():
                     run(['/etc/init.d/dnsmasq', 'reload'])

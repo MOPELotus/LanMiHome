@@ -1,6 +1,8 @@
 import importlib.util
 from pathlib import Path
 import unittest
+from unittest.mock import patch
+from types import SimpleNamespace
 
 
 SPEC = importlib.util.spec_from_file_location('integration', Path(__file__).parents[1] / 'integration.py')
@@ -85,6 +87,13 @@ class IntegrationTests(unittest.TestCase):
         invalid['lines']['2']['interface'] = 'cwan2; reboot'
         with self.assertRaises(ValueError):
             MODULE.render_policy(invalid)
+
+    def test_firewall_reload_generation_uses_only_our_rule(self):
+        result = SimpleNamespace(returncode=0, stdout='{"nftables":[{"rule":{"handle":32,"expr":["other"]}},{"rule":{"handle":48,"expr":["lotus_direct4"]}}]}')
+        with patch.object(MODULE.subprocess, 'run', return_value=result):
+            self.assertEqual(MODULE.firewall_generation(), 48)
+        with patch.object(MODULE.subprocess, 'run', return_value=SimpleNamespace(returncode=1)):
+            self.assertIsNone(MODULE.firewall_generation())
 
 
 if __name__ == '__main__':
