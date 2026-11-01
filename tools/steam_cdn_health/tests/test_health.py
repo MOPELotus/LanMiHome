@@ -36,7 +36,7 @@ class HealthTests(unittest.TestCase):
     def test_valid_config_and_exact_hostname_records(self):
         MODULE.validate_config(self.config())
         self.assertEqual(MODULE.dns_text('cdn.example.com', ['1.1.1.1', '1.1.1.1']),
-                         'host-record=cdn.example.com,1.1.1.1,60\n')
+                         '1.1.1.1 cdn.example.com\n')
         self.assertNotIn('server=', MODULE.dns_text('cdn.example.com', ['1.1.1.1']))
 
     def test_recovery_requires_two_successes_and_failure_removes_immediately(self):
@@ -83,13 +83,17 @@ class HealthTests(unittest.TestCase):
             root = Path(directory)
             unrelated = root / 'other.conf'
             unrelated.write_text('unchanged')
-            with patch.object(MODULE.subprocess, 'run') as runner:
+            with patch.object(MODULE, 'RUNTIME', root / 'runtime'), patch.object(MODULE.subprocess, 'run') as runner:
                 self.assertTrue(MODULE.publish('cdn.example.com', ['1.1.1.1'], [root]))
                 self.assertEqual(runner.call_count, 2)
+                self.assertEqual(runner.call_args.args[0][1], 'restart')
                 runner.reset_mock()
                 self.assertFalse(MODULE.publish('cdn.example.com', ['1.1.1.1'], [root]))
                 runner.assert_not_called()
                 self.assertTrue(MODULE.publish('cdn.example.com', [], [root]))
+                self.assertEqual(runner.call_args.args[0][1], 'reload')
+                self.assertEqual((root / 'runtime' / 'hosts').read_text(), '')
+                self.assertTrue(MODULE.publish('', [], [root]))
             self.assertFalse((root / MODULE.FRAGMENT).exists())
             self.assertEqual(unrelated.read_text(), 'unchanged')
 
@@ -98,7 +102,7 @@ class HealthTests(unittest.TestCase):
             root = Path(directory)
             path = root / MODULE.FRAGMENT
             path.write_text('original')
-            with patch.object(MODULE.subprocess, 'run', side_effect=RuntimeError('test failed')):
+            with patch.object(MODULE, 'RUNTIME', root / 'runtime'), patch.object(MODULE.subprocess, 'run', side_effect=RuntimeError('test failed')):
                 with self.assertRaises(RuntimeError):
                     MODULE.publish('cdn.example.com', ['1.1.1.1'], [root])
             self.assertEqual(path.read_text(), 'original')

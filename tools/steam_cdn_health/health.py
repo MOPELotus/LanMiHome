@@ -92,7 +92,7 @@ def update_health(previous, results):
 
 
 def dns_text(domain, addresses):
-    return ''.join(f'host-record={domain},{public_address(address)},60\n'
+    return ''.join(f'{public_address(address)} {domain}\n'
                    for address in sorted(set(addresses)))
 
 
@@ -112,31 +112,42 @@ def config_directories():
 
 def publish(domain, addresses, directories):
     content = dns_text(domain, addresses)
+    RUNTIME.mkdir(mode=0o700, parents=True, exist_ok=True)
+    hosts = RUNTIME / 'hosts'
     changed = False
+    config_changed = False
+    if not hosts.exists() or hosts.read_text() != content:
+        temporary = hosts.with_name('hosts.new')
+        descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(descriptor, 'w') as stream:
+            stream.write(content)
+        os.replace(temporary, hosts)
+        changed = True
+    fragment = 'addn-hosts=' + str(hosts) + '\n' if domain else ''
     for directory in directories:
         path = directory / FRAGMENT
-        if not content:
+        if not fragment:
             if path.exists():
                 path.unlink()
-                changed = True
+                config_changed = True
             continue
-        if path.exists() and path.read_text() == content:
+        if path.exists() and path.read_text() == fragment:
             continue
         temporary = path.with_name(path.name + '.new')
         descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
         try:
             with os.fdopen(descriptor, 'w') as stream:
-                stream.write(content)
+                stream.write(fragment)
             subprocess.run(['dnsmasq', '--test', '--conf-file=' + str(temporary)],
                            check=True, capture_output=True, timeout=10)
             os.replace(temporary, path)
-            changed = True
+            config_changed = True
         finally:
             temporary.unlink(missing_ok=True)
-    if changed:
-        subprocess.run(['/etc/init.d/dnsmasq', 'reload'], check=True,
+    if changed or config_changed:
+        subprocess.run(['/etc/init.d/dnsmasq', 'restart' if config_changed else 'reload'], check=True,
                        capture_output=True, timeout=20)
-    return changed
+    return changed or config_changed
 
 
 def once():
