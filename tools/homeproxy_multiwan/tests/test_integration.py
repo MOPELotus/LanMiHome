@@ -30,6 +30,12 @@ class IntegrationTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             MODULE.patch_config({'outbounds': [{'type': 'direct', 'bind_interface': 'wan'}]})
 
+    def test_automatic_interface_binding_is_removed_for_policy_routing(self):
+        config = {'outbounds': [{'type': 'direct'}], 'route': {'auto_detect_interface': True}}
+        self.assertFalse(MODULE.patch_config(config)['route']['auto_detect_interface'])
+        with self.assertRaises(ValueError):
+            MODULE.patch_config({'outbounds': [{'type': 'direct'}], 'route': {'default_interface': 'eth1'}})
+
     def test_domains_normalize_and_deduplicate(self):
         self.assertEqual(MODULE.direct_domains('# comment\nSteamContent.com\n*.example.org.\nsteamcontent.com\n'),
                          ['example.org', 'steamcontent.com'])

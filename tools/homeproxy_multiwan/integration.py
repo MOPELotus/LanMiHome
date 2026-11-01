@@ -30,6 +30,10 @@ def atomic_text(path, text):
 
 
 def patch_config(config):
+    route = config.setdefault('route', {})
+    if route.get('default_interface'):
+        raise ValueError('Default interface binding requires a manual migration')
+    route['auto_detect_interface'] = False
     count = 0
     for outbound in config.get('outbounds', []):
         if outbound.get('type') in NETWORK_TYPES:

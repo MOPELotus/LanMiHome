@@ -7,6 +7,8 @@
 2. sing-box 代理和残余 direct-out 连接：生成器增加专用 socket mark 0x4200，
    独立 nft output route 链按健康线路分配，连接标记 0x4301–0x4303 固定出口，
    路由标记复用原三路规则 0x4101–0x4103，并显式做路由器本机连接的源 NAT。
+   关闭 sing-box 自动接口绑定，避免 SO_BINDTODEVICE 把连接重新锁回主 WAN；
+   防环依赖 socket mark 在 HomeProxy output 链提前放行。
 
 不修改校园认证、原 LAN 规则、路由表、已有硬件限速和 HNAT 开关。
 这是多连接 IPv4 分流，不是单连接叠加。TUN 和加密代理本身仍由 CPU 处理。
