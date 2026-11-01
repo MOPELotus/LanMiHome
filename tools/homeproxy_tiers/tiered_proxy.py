@@ -84,27 +84,47 @@ def prepare():
     nodes = eligible_nodes(sections)
     if not nodes:
         raise ValueError('No eligible nodes; refusing empty proxy pool')
-    commands = ['set homeproxy.config.main_node=urltest',
-                'set homeproxy.config.main_udp_node=same',
-                'delete homeproxy.config.main_urltest_nodes']
-    commands.extend('add_list homeproxy.config.main_urltest_nodes=' + node['identity'] for node in nodes)
+    commands = prepare_commands(sections['config'], nodes)
+    if not commands:
+        return
     commands.append('commit homeproxy')
     subprocess.run(['uci', '-q', 'batch'], input='\n'.join(commands) + '\n',
                    text=True, check=True, capture_output=True)
 
 
-def patch_config(config, nodes, secret, port):
+def prepare_commands(settings, nodes):
+    commands = []
+    for key, value in [('main_node', 'urltest'), ('main_udp_node', 'same')]:
+        if settings.get(key) != value:
+            commands.append('set homeproxy.config.' + key + '=' + value)
+    previous = settings.get('main_urltest_nodes', [])
+    if isinstance(previous, str):
+        previous = [previous]
+    desired = [node['identity'] for node in nodes]
+    if previous != desired:
+        if previous:
+            commands.append('delete homeproxy.config.main_urltest_nodes')
+        commands.extend('add_list homeproxy.config.main_urltest_nodes=' + identity for identity in desired)
+    return commands
+
+
+def patch_config(config, nodes, secret, port, initial_selected=None):
+    if not nodes:
+        raise ValueError('Empty proxy pool')
+    nodes = sorted(nodes, key=lambda node: (Decimal(node['cost']), node['label']))
     existing = {outbound['tag'] for outbound in config['outbounds']}
     if 'main-out' not in existing or any(node['tag'] not in existing for node in nodes):
         raise ValueError('Generated proxy pool does not match subscription')
     groups = {}
+    initial = next((node for node in nodes if node['tag'] == initial_selected), nodes[0])
     for node in nodes:
         groups.setdefault(tier_tag(node['cost']), []).append(node['tag'])
     replacements = [dict(type='selector', tag=tag, outbounds=members,
-                         default=members[0], interrupt_exist_connections=False)
+                         default=initial['tag'] if initial['tag'] in members else members[0],
+                         interrupt_exist_connections=False)
                     for tag, members in groups.items()]
     main = dict(type='selector', tag='main-out', outbounds=list(groups),
-                default=next(iter(groups)), interrupt_exist_connections=False)
+                default=tier_tag(initial['cost']), interrupt_exist_connections=False)
     config['outbounds'] = [outbound for outbound in config['outbounds']
                            if outbound['tag'] != 'main-out'] + replacements + [main]
     experimental = config.setdefault('experimental', {})
@@ -120,8 +140,10 @@ def finalize():
         return
     nodes = eligible_nodes(sections)
     settings = json.loads((BASE / 'private.json').read_text())
+    previous = json.loads(STATE.read_text()) if STATE.exists() else {}
     config = patch_config(json.loads(GENERATED.read_text()), nodes,
-                          settings['secret'], settings['port'])
+                          settings['secret'], settings['port'],
+                          previous.get('selected', settings.get('bootstrap_tag')))
     candidate = GENERATED.with_suffix('.tiers-candidate')
     try:
         atomic_json(candidate, config)
@@ -165,6 +187,16 @@ def select_node(nodes, delays, previous):
     return current
 
 
+def locked_reconcile():
+    import fcntl
+    with Path('/var/lock/homeproxy-tiers.lock').open('a') as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            return
+        reconcile()
+
+
 def reconcile():
     sections = read_uci()
     if (sections.get('config', {}).get('lotus_tiers_enabled') != '1'
@@ -176,6 +208,10 @@ def reconcile():
     if proxies.get('main-out', {}).get('type', '').lower() != 'selector':
         return
     previous = json.loads(STATE.read_text()) if STATE.exists() else {}
+    current_group = proxies['main-out'].get('now')
+    actual_selected = proxies.get(current_group, {}).get('now')
+    if actual_selected in {node['tag'] for node in nodes}:
+        previous['selected'] = actual_selected
 
     def probe(node):
         query = urllib.parse.urlencode({'url': settings['probe_url'], 'timeout': 4000})
@@ -212,7 +248,7 @@ def daemon():
     while True:
         started = time.monotonic()
         try:
-            reconcile()
+            locked_reconcile()
         except Exception as error:
             print(json.dumps(dict(event='tier_probe_error', error=type(error).__name__)), flush=True)
         time.sleep(max(5, 60 - (time.monotonic() - started)))
@@ -222,7 +258,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('action', choices=['prepare', 'finalize', 'daemon', 'once'])
     action = parser.parse_args().action
-    {'prepare': prepare, 'finalize': finalize, 'daemon': daemon, 'once': reconcile}[action]()
+    {'prepare': prepare, 'finalize': finalize, 'daemon': daemon, 'once': locked_reconcile}[action]()
 
 
 if __name__ == '__main__':

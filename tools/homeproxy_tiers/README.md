@@ -32,6 +32,15 @@
 HomeProxy 软件包升级后需核对生成器包装是否仍存在，不盲目覆盖新版原生生成器。
 回滚时停用调度服务，恢复原生生成器和已备份的 UCI 配置，再重启 HomeProxy。
 
+## 与多 WAN 钩子共存
+
+如果已安装 `homeproxy_multiwan`，这里备份的“原生成器”应是正在使用的多 WAN 包装器，
+而不是覆盖或绕过它。调用顺序为：阶梯 prepare → 多 WAN 包装器 → 原生生成器 →
+多 WAN finalize → 阶梯 finalize。保留既有 socket mark、接口绑定策略与直连 DNS 钩子。
+可在私有设置中指定 `bootstrap_tag` 为已验证可用的候选节点，避免启动时先落入故障低价档；
+之后优先恢复上次选择，再由探测结果调整。准备阶段配置未变化时不重复写入 UCI。
+控制器以 `/var/lock/homeproxy-tiers.lock` 排除手工 once 与守护进程并发执行。
+
 ## 验证
 
 `python -m unittest discover -s tools/homeproxy_tiers/tests -v`

@@ -3,6 +3,9 @@ from decimal import Decimal
 import importlib.util
 from pathlib import Path
 import unittest
+import json
+import tempfile
+from unittest.mock import patch
 
 
 SPEC = importlib.util.spec_from_file_location('tiered_proxy', Path(__file__).parents[1] / 'tiered_proxy.py')
@@ -77,6 +80,53 @@ class TierTests(unittest.TestCase):
             MODULE.patch_config({'outbounds': [{'tag': 'main-out'}, {'tag': 'present'}],
                                  'experimental': {'clash_api': {'external_controller': 'existing'}}},
                                 [node('present', '1')], '', 1)
+
+    def test_prepare_handles_missing_list_and_avoids_flash_writes(self):
+        nodes = [dict(identity='first')]
+        commands = MODULE.prepare_commands({}, nodes)
+        self.assertNotIn('delete homeproxy.config.main_urltest_nodes', commands)
+        self.assertIn('add_list homeproxy.config.main_urltest_nodes=first', commands)
+        self.assertEqual(MODULE.prepare_commands(dict(main_node='urltest', main_udp_node='same',
+                                                     main_urltest_nodes='first'), nodes), [])
+
+    def test_bootstrap_and_multiwan_settings_survive_tier_patch(self):
+        nodes = [node('backup', '1'), node('cheap', '0.1')]
+        config = dict(outbounds=[dict(tag='main-out', type='urltest'),
+                                 dict(tag='cheap', type='anytls', routing_mark=0x4200),
+                                 dict(tag='backup', type='vless', routing_mark=0x4200)],
+                      route=dict(auto_detect_interface=False))
+        patched = MODULE.patch_config(config, nodes, 'test-only-secret', 19099, 'backup')
+        main = next(item for item in patched['outbounds'] if item['tag'] == 'main-out')
+        self.assertEqual(main['outbounds'], ['lotus-rate-0_1', 'lotus-rate-1'])
+        self.assertEqual(main['default'], 'lotus-rate-1')
+        self.assertFalse(patched['route']['auto_detect_interface'])
+        self.assertEqual(next(item for item in patched['outbounds'] if item['tag'] == 'cheap')['routing_mark'], 0x4200)
+
+    def test_reconcile_selects_real_groups_after_recovery(self):
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            state = base / 'state.json'
+            (base / 'private.json').write_text(json.dumps(dict(port=19099, secret='test-only', probe_url='https://example.org')))
+            (base / 'pool.json').write_text(json.dumps(dict(nodes=[node('cheap', '0.1'), node('backup', '1')])))
+            state.write_text(json.dumps(dict(selected='backup', streaks={'cheap': 1})))
+            changes = []
+
+            def api(settings, path, method='GET', payload=None):
+                if method == 'PUT':
+                    changes.append((path, payload['name']))
+                    return {}
+                if path == '/proxies':
+                    return dict(proxies={'main-out': dict(type='Selector', now='lotus-rate-1'),
+                                         'lotus-rate-1': dict(now='backup')})
+                return dict(delay=500 if '/cheap/' in path else 10)
+
+            sections = {'config': dict(lotus_tiers_enabled='1', main_node='urltest')}
+            with patch.object(MODULE, 'BASE', base), patch.object(MODULE, 'STATE', state), \
+                    patch.object(MODULE, 'read_uci', return_value=sections), patch.object(MODULE, 'api', side_effect=api):
+                MODULE.reconcile()
+            self.assertEqual(changes, [('/proxies/lotus-rate-0_1', 'cheap'),
+                                       ('/proxies/main-out', 'lotus-rate-0_1')])
+            self.assertEqual(json.loads(state.read_text())['selected'], 'cheap')
 
 
 if __name__ == '__main__':
