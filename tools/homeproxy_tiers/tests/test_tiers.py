@@ -5,6 +5,7 @@ from pathlib import Path
 import unittest
 import json
 import tempfile
+from types import SimpleNamespace
 from unittest.mock import patch
 
 
@@ -18,6 +19,41 @@ def node(tag, cost):
 
 
 class TierTests(unittest.TestCase):
+    def test_read_uci_uses_absolute_path_with_restricted_environment(self):
+        result = SimpleNamespace(stdout="homeproxy.config=homeproxy\nhomeproxy.config.main_node='urltest'\n")
+        with patch.dict(MODULE.os.environ, {'PATH': '/usr/bin:/bin'}, clear=True), \
+                patch.object(MODULE.subprocess, 'run', return_value=result) as run:
+            self.assertEqual(MODULE.read_uci()['config']['main_node'], 'urltest')
+        run.assert_called_once_with(['/sbin/uci', '-q', 'show', 'homeproxy'], check=True,
+                                    capture_output=True, text=True)
+
+    def test_prepare_uses_absolute_uci_for_batch(self):
+        sections = {'config': dict(lotus_tiers_enabled='1')}
+        with patch.dict(MODULE.os.environ, {'PATH': '/usr/bin:/bin'}, clear=True), \
+                patch.object(MODULE, 'read_uci', return_value=sections), \
+                patch.object(MODULE, 'eligible_nodes', return_value=[dict(identity='first')]), \
+                patch.object(MODULE.subprocess, 'run') as run:
+            MODULE.prepare()
+        self.assertEqual(run.call_args.args[0], ['/sbin/uci', '-q', 'batch'])
+        self.assertTrue(run.call_args.kwargs['input'].endswith('commit homeproxy\n'))
+
+    def test_finalize_uses_absolute_validator_with_restricted_environment(self):
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            generated = base / 'generated.json'
+            generated.write_text(json.dumps(dict(outbounds=[dict(tag='main-out'), dict(tag='cheap')])))
+            (base / 'private.json').write_text(json.dumps(dict(secret='test-only', port=19099)))
+            with patch.dict(MODULE.os.environ, {'PATH': '/usr/bin:/bin'}, clear=True), \
+                    patch.object(MODULE, 'BASE', base), patch.object(MODULE, 'GENERATED', generated), \
+                    patch.object(MODULE, 'STATE', base / 'state.json'), \
+                    patch.object(MODULE, 'read_uci', return_value={'config': dict(lotus_tiers_enabled='1')}), \
+                    patch.object(MODULE, 'eligible_nodes', return_value=[node('cheap', '0.1')]), \
+                    patch.object(MODULE.subprocess, 'run', return_value=SimpleNamespace(returncode=0)) as run:
+                MODULE.finalize()
+            self.assertEqual(run.call_args.args[0], ['/usr/bin/sing-box', 'check', '-c',
+                                                   str(generated.with_suffix('.tiers-candidate'))])
+            self.assertTrue((base / 'pool.json').exists())
+
     def test_region_exclusions(self):
         for label in ['🇭🇰测试', 'HK GO ×0.1', 'TaiWan GO', '台湾', '澳門', 'Macau', 'Hong Kong']:
             with self.subTest(label=label):

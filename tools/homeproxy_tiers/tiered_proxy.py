@@ -34,7 +34,7 @@ def atomic_json(path, value):
 
 
 def read_uci():
-    result = subprocess.run(['uci', '-q', 'show', 'homeproxy'], check=True,
+    result = subprocess.run(['/sbin/uci', '-q', 'show', 'homeproxy'], check=True,
                             capture_output=True, text=True)
     sections = {}
     for row in result.stdout.splitlines():
@@ -90,7 +90,7 @@ def prepare():
     if not commands:
         return
     commands.append('commit homeproxy')
-    subprocess.run(['uci', '-q', 'batch'], input='\n'.join(commands) + '\n',
+    subprocess.run(['/sbin/uci', '-q', 'batch'], input='\n'.join(commands) + '\n',
                    text=True, check=True, capture_output=True)
 
 
@@ -161,7 +161,7 @@ def finalize():
     candidate = GENERATED.with_suffix('.tiers-candidate')
     try:
         atomic_json(candidate, config)
-        checked = subprocess.run(['sing-box', 'check', '-c', str(candidate)], capture_output=True)
+        checked = subprocess.run(['/usr/bin/sing-box', 'check', '-c', str(candidate)], capture_output=True)
         if checked.returncode:
             raise ValueError('Tiered sing-box configuration failed validation')
         os.replace(candidate, GENERATED)

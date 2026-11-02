@@ -28,6 +28,8 @@
 将本目录 `generate_client.uc` 安装至原生成器位置。
 原生配置生成前同步当前订阅节点清单，生成后只替换代理选择组并增加带认证的回环控制器。
 新配置先通过 `sing-box check`，再原子替换；订阅更新后重新生成阶梯。
+生成钩子使用 `/sbin/uci`、`/usr/bin/sing-box` 绝对路径，不依赖订阅更新进程的 `PATH`；
+即使环境仅含 `/usr/bin:/bin`，也能读取、提交节点清单并验证配置。
 
 设置 `homeproxy.config.lotus_tiers_enabled=1`、`main_node=urltest` 和 `main_udp_node=same`，
 安装并启用 `homeproxy-tiers.init` 为 `/etc/init.d/homeproxy-tiers`，验证后启动。
