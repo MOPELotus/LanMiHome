@@ -31,6 +31,8 @@ jobs:
         run: python -m unittest discover -s tools/modem_wifi_schedule/tests -v
       - name: Test proxy multiplier tiers
         run: python -m unittest discover -s tools/homeproxy_tiers/tests -v
+      - name: Test SSH proxy transport safety
+        run: python -m unittest discover -s tools/ssh_proxy/tests -v
       - name: Test HomeProxy multi-WAN integration
         run: python -m unittest discover -s tools/homeproxy_multiwan/tests -v
       - name: Test campus subnet isolation
