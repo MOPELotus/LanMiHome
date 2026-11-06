@@ -97,6 +97,7 @@ class TunnelTests(unittest.TestCase):
         source = (Path(__file__).parents[1] / 'ssh-proxy.init').read_text()
         self.assertIn('START=98\n', source)
         self.assertIn('STOP=08\n', source)
+        self.assertIn('procd_set_param respawn 3600 10 0\n', source)
 
 
 if __name__ == '__main__':

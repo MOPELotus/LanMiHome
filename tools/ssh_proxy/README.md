@@ -19,7 +19,8 @@ The tunnel carries TCP only; it is not a UDP VPN or a hardware-offloaded path.
 - Host verification remains strict. A changed or unknown host key requires
   independent verification; do not use `StrictHostKeyChecking=no`.
 - Install `ssh-proxy.init` as `/etc/init.d/ssh-proxy`. Procd restarts failed
-  tunnels; SSH keepalives detect dead peers. Initial establishment is bounded
+  tunnels indefinitely with a ten-second retry delay, including while campus
+  authentication is unavailable after boot; SSH keepalives detect dead peers. Initial establishment is bounded
   by the SSH connection timeout.
 
 The SSH transport uses a bounded stream relay with socket mark `0x4200` before
