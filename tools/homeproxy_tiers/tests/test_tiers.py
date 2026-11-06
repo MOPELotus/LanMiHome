@@ -19,6 +19,19 @@ def node(tag, cost):
 
 
 class TierTests(unittest.TestCase):
+    def test_ssh_tunnel_sorts_immediately_after_point_45(self):
+        sections = {
+            'cheap': dict(section_type='node', label='SG ×0.45', type='anytls', port='443'),
+            'lotus_ssh_tunnel': dict(section_type='node', label='SSH tunnel', type='http',
+                                    address='127.0.0.1', port='27653'),
+            'next': dict(section_type='node', label='US ×0.5', type='anytls', port='443'),
+            'other': dict(section_type='node', label='Other HTTP', type='http', address='127.0.0.1', port='27653'),
+        }
+        nodes = MODULE.eligible_nodes(sections)
+        self.assertEqual([item['identity'] for item in nodes], ['cheap', 'lotus_ssh_tunnel', 'next'])
+        sections['lotus_ssh_tunnel']['address'] = '192.0.2.1'
+        self.assertNotIn('lotus_ssh_tunnel', [item['identity'] for item in MODULE.eligible_nodes(sections)])
+
     def test_read_uci_uses_absolute_path_with_restricted_environment(self):
         result = SimpleNamespace(stdout="homeproxy.config=homeproxy\nhomeproxy.config.main_node='urltest'\n")
         with patch.dict(MODULE.os.environ, {'PATH': '/usr/bin:/bin'}, clear=True), \

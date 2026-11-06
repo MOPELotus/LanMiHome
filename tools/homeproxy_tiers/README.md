@@ -53,4 +53,8 @@ HomeProxy 软件包升级后需核对生成器包装是否仍存在，不盲目�
 
 ## 验证
 
+手动添加的 `lotus_ssh_tunnel` HTTP 节点仅在地址为 `127.0.0.1:27653` 时参与阶梯，
+排序值固定为 `0.450001`，放在 ×0.45 之后、×0.5 之前；此值只表达优先级，不代表流量计费。
+其他 HTTP 节点不会自动进入候选池。SSH 隧道继续独立运行并保持严格主机指纹校验。
+
 `python -m unittest discover -s tools/homeproxy_tiers/tests -v`

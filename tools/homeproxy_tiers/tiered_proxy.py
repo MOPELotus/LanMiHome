@@ -66,12 +66,14 @@ def eligible_nodes(sections):
         label = node.get('label', identity)
         if node.get('section_type') != 'node' or EXCLUDED.search(label) or METADATA.search(label):
             continue
-        if node.get('type') not in ('vless', 'vmess', 'anytls', 'trojan', 'shadowsocks', 'hysteria2', 'tuic'):
+        ssh_tunnel = (identity == 'lotus_ssh_tunnel' and node.get('type') == 'http'
+                      and node.get('address') == '127.0.0.1' and str(node.get('port')) == '27653')
+        if not ssh_tunnel and node.get('type') not in ('vless', 'vmess', 'anytls', 'trojan', 'shadowsocks', 'hysteria2', 'tuic'):
             continue
         if str(node.get('port')) == '9999':
             continue
         nodes.append(dict(tag='cfg-' + identity + '-out', identity=identity,
-                          label=label, cost=str(multiplier(label))))
+                          label=label, cost='0.450001' if ssh_tunnel else str(multiplier(label))))
     return sorted(nodes, key=lambda node: (Decimal(node['cost']), node['label']))
 
 
